@@ -420,6 +420,40 @@ def _file_slot_labels(template_name: str) -> tuple:
 _ENCODINGS = ["utf-8", "cp1252", "latin-1"]
 
 
+def _count_rows_fast(file_path: str, sample_df: pd.DataFrame | None = None) -> int:
+    """
+    Fast row count without loading the full file into memory.
+    - CSV/TSV/TXT: binary line count (no decoding needed).
+    - Excel/JSON/parquet: fall back to reading with pandas (no shortcut).
+    Returns -1 on failure.
+    """
+    ext = Path(file_path).suffix.lower()
+    if ext in (".csv", ".tsv", ".txt", ""):
+        try:
+            with open(file_path, "rb") as fh:
+                total = sum(1 for _ in fh)
+            return max(0, total - 1)   # subtract header row
+        except Exception:
+            pass
+    # For binary formats, re-use the already-loaded sample if provided
+    if sample_df is not None:
+        return len(sample_df)
+    try:
+        ext2 = Path(file_path).suffix.lower()
+        if ext2 in (".xlsx", ".xls"):
+            return len(pd.read_excel(file_path, usecols=[0]))
+        if ext2 == ".parquet":
+            import pyarrow.parquet as _pq  # type: ignore
+            return _pq.read_metadata(file_path).num_rows
+        if ext2 == ".json":
+            with open(file_path, "r", encoding="utf-8", errors="replace") as fh:
+                data = json.load(fh)
+            return len(data) if isinstance(data, list) else 1
+    except Exception:
+        pass
+    return -1
+
+
 def _sniff_load(file_path: str, max_rows: int = 200) -> pd.DataFrame:
     ext = Path(file_path).suffix.lower()
     try:
@@ -518,11 +552,13 @@ def scan_folder(folder_path: str):
         name = fpath.name
         ext  = fpath.suffix.lower() or "(none)"
         try:
-            df    = _sniff_load(str(fpath), max_rows=5000)
-            nrow  = len(df)
+            # Read only a tiny sample — we just need column names here.
+            # Row count is obtained via the fast counter to avoid loading the full file.
+            df    = _sniff_load(str(fpath), max_rows=5)
             ncol  = len(df.columns)
             cols  = [str(c) for c in df.columns.tolist()]
             cols_all = ", ".join(cols)   # all column names, no truncation
+            nrow  = _count_rows_fast(str(fpath), df)
             status = "✅"
             all_columns[name] = cols
         except Exception as exc:
@@ -608,7 +644,7 @@ def show_file_detail(selected_name: str, file_data_json: str):
     if not entry:
         return "<p style='color:red'>File not found in state.</p>", pd.DataFrame()
 
-    df = _sniff_load(entry["path"], max_rows=500)
+    df = _sniff_load(entry["path"], max_rows=10)
     if df.empty:
         return "<p style='color:orange'>File loaded but no data found.</p>", pd.DataFrame()
 
@@ -1138,6 +1174,13 @@ def run_script(
     if not preprocess_fn:
         return ("<p style='color:red'>preprocess() function not found in script.</p>",) + EMPTY[1:]
 
+    # ── 2b. Redirect output to a temp dir when OUTPUT_DIR is empty ────────
+    # Prevents PermissionError when the input folder is read-only (e.g. git
+    # archive, OneDrive, network share). The generated script's OUTPUT_DIR
+    # global is patched here — preprocess() reads it at call time from ns.
+    if not (ns.get("OUTPUT_DIR") or "").strip():
+        ns["OUTPUT_DIR"] = tempfile.mkdtemp(prefix="pplib_run_")
+
     # ── 3. Resolve input paths: join base_location + filename ────────────
     base = (base_location or "").strip()
     f1   = _resolve_full_path(base, file1_val or "")
@@ -1215,9 +1258,11 @@ def run_script(
     total_rows = 0
     for fpath in output_files:
         try:
-            df_tmp = _sniff_load(str(fpath), max_rows=100_000)
-            nrow = len(df_tmp)
+            df_tmp = _sniff_load(str(fpath), max_rows=5)   # headers only for ncol
             ncol = len(df_tmp.columns)
+            nrow = _count_rows_fast(str(fpath), df_tmp)
+            if nrow < 0:
+                nrow = "?"
         except Exception:
             nrow, ncol = "?", "?"
         if isinstance(nrow, int):
@@ -1249,7 +1294,10 @@ def run_script(
 
     # ── 7. Preview first output file ─────────────────────────────────────
     try:
-        preview_df = _sniff_load(str(output_files[0]), max_rows=100)
+        preview_df = _sniff_load(str(output_files[0]), max_rows=25)
+        # Truncate long strings so the Gradio JSON payload stays small
+        for col in preview_df.select_dtypes(include="object").columns:
+            preview_df[col] = preview_df[col].astype(str).str.slice(0, 120)
     except Exception:
         preview_df = pd.DataFrame()
 
@@ -1420,8 +1468,8 @@ def build_ui() -> gr.Blocks:
                 )
                 output_info_html = gr.HTML()
                 output_preview   = gr.Dataframe(
-                    label="Output preview (first 100 rows of first output file)",
-                    interactive=False, wrap=True,
+                    label="Output preview (first 25 rows of first output file)",
+                    interactive=False, wrap=False,
                 )
                 output_download  = gr.File(
                     label="Download output file(s)",
