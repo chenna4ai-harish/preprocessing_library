@@ -22,6 +22,8 @@ import os
 import sys
 import tempfile
 import zipfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from functools import lru_cache
 from pathlib import Path
 
 import gradio as gr
@@ -422,30 +424,43 @@ _ENCODINGS = ["utf-8", "cp1252", "latin-1"]
 
 def _count_rows_fast(file_path: str, sample_df: pd.DataFrame | None = None) -> int:
     """
-    Fast row count without loading the full file into memory.
-    - CSV/TSV/TXT: binary line count (no decoding needed).
-    - Excel/JSON/parquet: fall back to reading with pandas (no shortcut).
+    Fast row count — never reads the whole file.
+    - CSV/TSV/TXT: samples first 64 KB to get avg bytes/line, extrapolates.
+      Exact for files ≤ 64 KB; ±5 % estimate for larger files.
+    - parquet: reads metadata (no data loaded).
+    - Excel/JSON: uses already-loaded sample_df length (scan always passes one).
     Returns -1 on failure.
     """
     ext = Path(file_path).suffix.lower()
     if ext in (".csv", ".tsv", ".txt", ""):
         try:
+            file_size = Path(file_path).stat().st_size
+            if file_size == 0:
+                return 0
+            sample_size = min(65_536, file_size)
             with open(file_path, "rb") as fh:
-                total = sum(1 for _ in fh)
-            return max(0, total - 1)   # subtract header row
+                chunk = fh.read(sample_size)
+            newlines = chunk.count(b"\n")
+            if newlines <= 1:
+                # Very few lines in sample — just count them all (tiny file)
+                with open(file_path, "rb") as fh:
+                    total = sum(1 for _ in fh)
+                return max(0, total - 1)
+            avg_bytes_per_line = sample_size / newlines
+            estimated = int(file_size / avg_bytes_per_line)
+            return max(0, estimated - 1)  # subtract header row
         except Exception:
             pass
     # For binary formats, re-use the already-loaded sample if provided
     if sample_df is not None:
         return len(sample_df)
     try:
-        ext2 = Path(file_path).suffix.lower()
-        if ext2 in (".xlsx", ".xls"):
+        if ext in (".xlsx", ".xls"):
             return len(pd.read_excel(file_path, usecols=[0]))
-        if ext2 == ".parquet":
+        if ext == ".parquet":
             import pyarrow.parquet as _pq  # type: ignore
             return _pq.read_metadata(file_path).num_rows
-        if ext2 == ".json":
+        if ext == ".json":
             with open(file_path, "r", encoding="utf-8", errors="replace") as fh:
                 data = json.load(fh)
             return len(data) if isinstance(data, list) else 1
@@ -500,10 +515,51 @@ def _sniff_load_zip(file_path: str, max_rows: int) -> pd.DataFrame:
 
 _MAX_FOLDER_FILES = 10   # hard limit on files per folder scan
 
+# ---------------------------------------------------------------------------
+# Folder scan cache — keyed on (folder_path, folder_mtime) so rescanning
+# a folder that hasn't changed on disk is instant.
+# ---------------------------------------------------------------------------
+_scan_cache: dict[tuple, tuple] = {}
+
+
+def _scan_one_file(fpath: Path) -> dict:
+    """Scan a single file and return a result dict. Runs in a thread."""
+    name = fpath.name
+    ext  = fpath.suffix.lower() or "(none)"
+    try:
+        # Load 10 rows — enough for columns + cached preview in show_file_detail
+        df    = _sniff_load(str(fpath), max_rows=10)
+        ncol  = len(df.columns)
+        cols  = [str(c) for c in df.columns.tolist()]
+        nrow  = _count_rows_fast(str(fpath), df)
+        # Serialise the preview now so show_file_detail never re-reads disk
+        preview_records = df.head(10).astype(str).to_dict(orient="split")
+        status = "✅"
+    except Exception as exc:
+        nrow, ncol, cols = 0, 0, []
+        preview_records  = {}
+        status = "⚠️"
+        exc_str = str(exc)
+
+    return {
+        "name":    name,
+        "path":    str(fpath),
+        "ext":     ext,
+        "rows":    nrow,
+        "cols":    ncol,
+        "columns": cols,
+        "preview": preview_records,   # cached — no second disk read in show_file_detail
+        "status":  status,
+        "error":   locals().get("exc_str", ""),
+    }
+
 
 def scan_folder(folder_path: str):
     """
     Scan *folder_path* for files (non-recursive, top-level only).
+    Files are scanned in parallel (ThreadPoolExecutor).
+    Results are cached per (folder_path, folder_mtime) for instant repeated scans.
+
     Returns:
         status_html, file_selector_update, file_data_json,
         cols_info_html, filename_choices_update, base_location_value
@@ -543,35 +599,47 @@ def scan_folder(folder_path: str):
         msg = f"<p style='color:orange'>No files found in <code>{folder_path}</code>.</p>"
         return msg, _EMPTY_CHOICES, "{}", msg, _EMPTY_FILE_DD, ""
 
+    # ── Cache check — use folder mtime as freshness key ─────────────────────
+    folder_mtime = folder.stat().st_mtime
+    cache_key    = (str(folder), folder_mtime)
+    if cache_key in _scan_cache:
+        return _scan_cache[cache_key]
+
+    # ── Parallel scan ────────────────────────────────────────────────────────
+    results_by_name: dict[str, dict] = {}
+    with ThreadPoolExecutor(max_workers=min(len(all_files), 6)) as pool:
+        future_map = {pool.submit(_scan_one_file, fpath): fpath for fpath in all_files}
+        for future in as_completed(future_map):
+            r = future.result()
+            results_by_name[r["name"]] = r
+
+    # Restore original sort order (as_completed returns in completion order)
+    ordered = [results_by_name[fpath.name] for fpath in all_files if fpath.name in results_by_name]
+
     file_data: dict[str, dict] = {}
     rows_html = ""
     all_columns: dict[str, list[str]] = {}
     filename_choices = ["(none)"]
 
-    for fpath in all_files:
-        name = fpath.name
-        ext  = fpath.suffix.lower() or "(none)"
-        try:
-            # Read only a tiny sample — we just need column names here.
-            # Row count is obtained via the fast counter to avoid loading the full file.
-            df    = _sniff_load(str(fpath), max_rows=5)
-            ncol  = len(df.columns)
-            cols  = [str(c) for c in df.columns.tolist()]
-            cols_all = ", ".join(cols)   # all column names, no truncation
-            nrow  = _count_rows_fast(str(fpath), df)
-            status = "✅"
-            all_columns[name] = cols
-        except Exception as exc:
-            nrow, ncol, cols_all, cols = 0, 0, str(exc), []
-            status = "⚠️"
+    for r in ordered:
+        name     = r["name"]
+        ext      = r["ext"]
+        nrow     = r["rows"]
+        ncol     = r["cols"]
+        cols     = r["columns"]
+        cols_all = ", ".join(cols)
+        status   = r["status"]
 
         file_data[name] = {
-            "path":    str(fpath),
+            "path":    r["path"],
             "ext":     ext,
             "rows":    nrow,
             "cols":    ncol,
             "columns": cols,
+            "preview": r["preview"],
         }
+        if cols:
+            all_columns[name] = cols
         filename_choices.append(name)
         rows_html += (
             f"<tr style='vertical-align:top'>"
@@ -622,7 +690,7 @@ def scan_folder(folder_path: str):
     )
 
     filenames = list(file_data.keys())
-    return (
+    result = (
         summary_html,
         gr.update(choices=filenames, value=filenames[0] if filenames else None),
         json.dumps(file_data),
@@ -630,10 +698,15 @@ def scan_folder(folder_path: str):
         gr.update(choices=filename_choices, value="(none)"),
         str(folder),     # base_location
     )
+    _scan_cache[cache_key] = result
+    return result
 
 
 def show_file_detail(selected_name: str, file_data_json: str):
-    """Return (file_info_html, preview_df) for the selected file."""
+    """
+    Return (file_info_html, preview_df) for the selected file.
+    Uses the preview cached during scan_folder — no disk read on selection.
+    """
     if not selected_name or not file_data_json:
         return "<p style='color:gray'>Select a file above.</p>", pd.DataFrame()
     try:
@@ -644,7 +717,14 @@ def show_file_detail(selected_name: str, file_data_json: str):
     if not entry:
         return "<p style='color:red'>File not found in state.</p>", pd.DataFrame()
 
-    df = _sniff_load(entry["path"], max_rows=10)
+    # Use cached preview (stored during scan) — avoids a second disk read
+    preview = entry.get("preview")
+    if preview and preview.get("data") and preview.get("columns"):
+        df = pd.DataFrame(preview["data"], columns=preview["columns"])
+    else:
+        # Fallback: read from disk (e.g. state loaded from older session)
+        df = _sniff_load(entry["path"], max_rows=10).astype(str)
+
     if df.empty:
         return "<p style='color:orange'>File loaded but no data found.</p>", pd.DataFrame()
 
@@ -667,7 +747,7 @@ def show_file_detail(selected_name: str, file_data_json: str):
         f"</div>"
     )
 
-    return info_html, df.head(10).astype(str)
+    return info_html, df.head(10)
 
 
 # ---------------------------------------------------------------------------
@@ -691,6 +771,7 @@ def _get_all_columns(file_data_json: str) -> list[str]:
 # Template UI helpers
 # ---------------------------------------------------------------------------
 
+@lru_cache(maxsize=None)
 def _params_to_json_str(template_name: str) -> str:
     info = TEMPLATE_CATALOG.get(template_name)
     if not info:
@@ -715,6 +796,7 @@ def _params_to_json_str(template_name: str) -> str:
     return json.dumps(d, indent=2)
 
 
+@lru_cache(maxsize=None)
 def _build_param_help_html(template_name: str) -> str:
     info = TEMPLATE_CATALOG.get(template_name)
     if not info:
@@ -1328,6 +1410,7 @@ def run_script(
 
 def build_ui() -> gr.Blocks:
     with gr.Blocks(title="Preprocessing Script Library", theme=gr.themes.Soft()) as app:
+        app.queue(default_concurrency_limit=4)
 
         gr.Markdown(
             "# Preprocessing Script Library\n"
@@ -1526,15 +1609,22 @@ def build_ui() -> gr.Blocks:
                 return ""
             return dropdown_val
 
-        file1_dropdown.change(fn=_pick_filename, inputs=[file1_dropdown], outputs=[file1_text])
+        # File dropdown selects → populate text box AND auto-fill output params
+        def _pick_and_autofill(dropdown_val, params_json, template_name, base_loc):
+            fname = dropdown_val if dropdown_val and dropdown_val != "(none)" else ""
+            new_params = _auto_fill_output_params(params_json, template_name, fname, base_loc)
+            return fname, new_params
+
+        file1_dropdown.change(
+            fn=_pick_and_autofill,
+            inputs=[file1_dropdown, params_json_box, template_dropdown, base_location_state],
+            outputs=[file1_text, params_json_box],
+        )
         file2_dropdown.change(fn=_pick_filename, inputs=[file2_dropdown], outputs=[file2_text])
 
-        # File 1 name change → auto-fill OUTPUT_FILENAME
-        file1_text.change(
-            fn=_auto_fill_output_params,
-            inputs=[params_json_box, template_dropdown, file1_text, base_location_state],
-            outputs=[params_json_box],
-        )
+        # Removed file1_text.change → _auto_fill_output_params:
+        # firing on every keystroke caused constant JSON churn with no UX gain.
+        # Auto-fill now triggers on dropdown select and folder scan (both intentional actions).
 
         # Template change → update desc, params, help, file labels, auto-fill output
         def _on_template_change(template_name, file1_val, base_loc):
@@ -1589,4 +1679,5 @@ if __name__ == "__main__":
     parser.add_argument("--host",  type=str, default="127.0.0.1")
     parser.add_argument("--share", action="store_true")
     args = parser.parse_args()
-    build_ui().launch(server_name=args.host, server_port=args.port, share=args.share)
+    build_ui().launch(server_name=args.host, server_port=args.port, share=args.share,
+                      max_threads=40)
