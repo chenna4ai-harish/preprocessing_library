@@ -1,0 +1,731 @@
+[
+  {
+    "template_name": "file_detect_load",
+    "display_name": "PS-01 \u2014 Detect & Load",
+    "description": "Auto-detect file format and load it into a clean output file.",
+    "function_sig": "preprocess(input_path: str) -> str",
+    "input_type": "single",
+    "parameters": [
+      {
+        "name": "OUTPUT_DIR",
+        "type": "str",
+        "default": "./output",
+        "help": "Directory to write the output file."
+      },
+      {
+        "name": "OUTPUT_FILENAME",
+        "type": "str",
+        "default": "detected_output.csv",
+        "help": "Name of the output file."
+      },
+      {
+        "name": "OUTPUT_FORMAT",
+        "type": "str",
+        "default": "csv",
+        "help": "csv | xlsx | json | parquet | tsv"
+      },
+      {
+        "name": "OUTPUT_FILENAME_PREFIX",
+        "type": "str",
+        "default": "loaded_",
+        "help": "Prefix prepended when no OUTPUT_FILENAME is given."
+      },
+      {
+        "name": "ENCODING_ORDER",
+        "type": "list",
+        "default": "[\"utf-8\", \"cp1252\", \"latin-1\"]",
+        "help": "Encodings tried in order for text files."
+      }
+    ]
+  },
+  {
+    "template_name": "file_union",
+    "display_name": "PS-02 \u2014 File Union (Vertical Stack)",
+    "description": "Vertically stack (union) multiple files. Handles column mismatches and optional source tagging.",
+    "function_sig": "preprocess(input_paths: list, output_columns=None) -> str",
+    "input_type": "multi",
+    "parameters": [
+      {
+        "name": "OUTPUT_DIR",
+        "type": "str",
+        "default": "./output",
+        "help": "Directory to write the output file."
+      },
+      {
+        "name": "OUTPUT_FILENAME",
+        "type": "str",
+        "default": "union.csv",
+        "help": "Name of the output file."
+      },
+      {
+        "name": "OUTPUT_FORMAT",
+        "type": "str",
+        "default": "csv",
+        "help": "csv | xlsx | json | parquet | tsv"
+      },
+      {
+        "name": "ADD_SOURCE_TAG",
+        "type": "bool",
+        "default": "True",
+        "help": "If True, adds a column with the source filename."
+      },
+      {
+        "name": "SOURCE_TAG_COLUMN",
+        "type": "str",
+        "default": "_source_file",
+        "help": "Name of the source tag column (used when ADD_SOURCE_TAG=True)."
+      }
+    ]
+  },
+  {
+    "template_name": "file_join_two",
+    "display_name": "PS-03 \u2014 Join Two Files",
+    "description": "Join two files on a single key column with configurable join type.",
+    "function_sig": "preprocess(left_path: str, right_path: str) -> str",
+    "input_type": "multi",
+    "parameters": [
+      {
+        "name": "JOIN_KEY",
+        "type": "str",
+        "default": "id",
+        "help": "Column name to join on (must exist in both files)."
+      },
+      {
+        "name": "JOIN_TYPE",
+        "type": "str",
+        "default": "inner",
+        "help": "inner | left | right | outer"
+      },
+      {
+        "name": "LEFT_SUFFIX",
+        "type": "str",
+        "default": "_left",
+        "help": "Suffix for overlapping columns from the left file."
+      },
+      {
+        "name": "RIGHT_SUFFIX",
+        "type": "str",
+        "default": "_right",
+        "help": "Suffix for overlapping columns from the right file."
+      },
+      {
+        "name": "OUTPUT_DIR",
+        "type": "str",
+        "default": "./output",
+        "help": "Directory to write the output file."
+      },
+      {
+        "name": "OUTPUT_FILENAME",
+        "type": "str",
+        "default": "joined.csv",
+        "help": "Name of the output file."
+      },
+      {
+        "name": "OUTPUT_FORMAT",
+        "type": "str",
+        "default": "csv",
+        "help": "csv | xlsx | json | parquet | tsv"
+      }
+    ]
+  },
+  {
+    "template_name": "file_join_multi",
+    "display_name": "PS-04 \u2014 Join Multiple Files (Sequential)",
+    "description": "Join multiple files sequentially, each step with its own key/type/suffixes.",
+    "function_sig": "preprocess(input_paths: list) -> str",
+    "input_type": "multi",
+    "parameters": [
+      {
+        "name": "JOIN_STEPS",
+        "type": "list_of_dicts",
+        "default": "[{\"key\": \"id\", \"how\": \"inner\", \"left_suffix\": \"_l\", \"right_suffix\": \"_r\"}]",
+        "help": "List of join steps. Each: {\"key\": \"col\", \"how\": \"inner|left|right|outer\", \"left_suffix\": \"_l\", \"right_suffix\": \"_r\"}"
+      },
+      {
+        "name": "OUTPUT_DIR",
+        "type": "str",
+        "default": "./output",
+        "help": "Directory to write the output file."
+      },
+      {
+        "name": "OUTPUT_FILENAME",
+        "type": "str",
+        "default": "multi_joined.csv",
+        "help": "Name of the output file."
+      },
+      {
+        "name": "OUTPUT_FORMAT",
+        "type": "str",
+        "default": "csv",
+        "help": "csv | xlsx | json | parquet | tsv"
+      }
+    ]
+  },
+  {
+    "template_name": "file_join_multi_key",
+    "display_name": "PS-05 \u2014 Join Two Files (Multi-Key)",
+    "description": "Join two files on multiple key columns simultaneously.",
+    "function_sig": "preprocess(left_path: str, right_path: str) -> str",
+    "input_type": "multi",
+    "parameters": [
+      {
+        "name": "JOIN_KEYS",
+        "type": "list",
+        "default": "[\"id\", \"date\"]",
+        "help": "List of column names to join on."
+      },
+      {
+        "name": "JOIN_TYPE",
+        "type": "str",
+        "default": "inner",
+        "help": "inner | left | right | outer"
+      },
+      {
+        "name": "LEFT_SUFFIX",
+        "type": "str",
+        "default": "_left",
+        "help": "Suffix for overlapping columns from the left file."
+      },
+      {
+        "name": "RIGHT_SUFFIX",
+        "type": "str",
+        "default": "_right",
+        "help": "Suffix for overlapping columns from the right file."
+      },
+      {
+        "name": "OUTPUT_DIR",
+        "type": "str",
+        "default": "./output",
+        "help": "Directory to write the output file."
+      },
+      {
+        "name": "OUTPUT_FILENAME",
+        "type": "str",
+        "default": "multikey_join.csv",
+        "help": "Name of the output file."
+      },
+      {
+        "name": "OUTPUT_FORMAT",
+        "type": "str",
+        "default": "csv",
+        "help": "csv | xlsx | json | parquet | tsv"
+      }
+    ]
+  },
+  {
+    "template_name": "file_denormalize",
+    "display_name": "PS-06 \u2014 Denormalize (Header + Detail)",
+    "description": "Join a header file and a detail file; prefix all detail columns.",
+    "function_sig": "preprocess(header_path: str, detail_path: str) -> str",
+    "input_type": "multi",
+    "parameters": [
+      {
+        "name": "JOIN_KEY",
+        "type": "str",
+        "default": "id",
+        "help": "Column shared by header and detail files."
+      },
+      {
+        "name": "JOIN_TYPE",
+        "type": "str",
+        "default": "left",
+        "help": "inner | left | right | outer"
+      },
+      {
+        "name": "DETAIL_PREFIX",
+        "type": "str",
+        "default": "detail_",
+        "help": "Prefix added to every detail column (except the join key)."
+      },
+      {
+        "name": "OUTPUT_DIR",
+        "type": "str",
+        "default": "./output",
+        "help": "Directory to write the output file."
+      },
+      {
+        "name": "OUTPUT_FILENAME",
+        "type": "str",
+        "default": "denormalized.csv",
+        "help": "Name of the output file."
+      },
+      {
+        "name": "OUTPUT_FORMAT",
+        "type": "str",
+        "default": "csv",
+        "help": "csv | xlsx | json | parquet | tsv"
+      }
+    ]
+  },
+  {
+    "template_name": "file_split_by_value",
+    "display_name": "PS-07 \u2014 Split by Column Value",
+    "description": "Split a file into one output file per unique value in a chosen column.",
+    "function_sig": "preprocess(input_path: str) -> str",
+    "input_type": "single",
+    "parameters": [
+      {
+        "name": "SPLIT_COLUMN",
+        "type": "str",
+        "default": "category",
+        "help": "Column whose distinct values drive the split."
+      },
+      {
+        "name": "OUTPUT_DIR",
+        "type": "str",
+        "default": "./output",
+        "help": "Directory to write split files."
+      },
+      {
+        "name": "OUTPUT_FORMAT",
+        "type": "str",
+        "default": "csv",
+        "help": "csv | xlsx | json | parquet | tsv"
+      }
+    ]
+  },
+  {
+    "template_name": "file_filter_to_files",
+    "display_name": "PS-08 \u2014 Filter Rows to Files (Query)",
+    "description": "Route rows to named output files using pandas query() expressions.",
+    "function_sig": "preprocess(input_path: str) -> str",
+    "input_type": "single",
+    "parameters": [
+      {
+        "name": "FILTER_RULES",
+        "type": "list_of_dicts",
+        "default": "[{\"condition\": \"status == 'ACTIVE'\", \"output_filename\": \"active.csv\"}]",
+        "help": "List of rules. Each: {\"condition\": \"pandas query string\", \"output_filename\": \"name.csv\"}"
+      },
+      {
+        "name": "UNMATCHED_FILENAME",
+        "type": "str",
+        "default": "unmatched.csv",
+        "help": "File for rows matching no rule. Empty string to discard."
+      },
+      {
+        "name": "OUTPUT_DIR",
+        "type": "str",
+        "default": "./output",
+        "help": "Directory to write output files."
+      },
+      {
+        "name": "OUTPUT_FORMAT",
+        "type": "str",
+        "default": "csv",
+        "help": "csv | xlsx | json | parquet | tsv"
+      }
+    ]
+  },
+  {
+    "template_name": "file_split_columns",
+    "display_name": "PS-09 \u2014 Split Columns to Files",
+    "description": "Split a wide file into multiple narrower files, each containing a subset of columns.",
+    "function_sig": "preprocess(input_path: str) -> str",
+    "input_type": "single",
+    "parameters": [
+      {
+        "name": "COMMON_KEY_COLUMNS",
+        "type": "list",
+        "default": "[\"id\"]",
+        "help": "Columns repeated in every output file (e.g. primary key)."
+      },
+      {
+        "name": "COLUMN_GROUPS",
+        "type": "list_of_dicts",
+        "default": "[{\"columns\": [\"name\", \"email\"], \"output_filename\": \"contacts.csv\"}]",
+        "help": "List of groups. Each: {\"columns\": [\"col1\", \"col2\"], \"output_filename\": \"name.csv\"}"
+      },
+      {
+        "name": "OUTPUT_DIR",
+        "type": "str",
+        "default": "./output",
+        "help": "Directory to write output files."
+      },
+      {
+        "name": "OUTPUT_FORMAT",
+        "type": "str",
+        "default": "csv",
+        "help": "csv | xlsx | json | parquet | tsv"
+      }
+    ]
+  },
+  {
+    "template_name": "file_deduplicate",
+    "display_name": "PS-10 \u2014 Deduplicate",
+    "description": "Remove duplicate rows based on selected key columns.",
+    "function_sig": "preprocess(input_path: str) -> str",
+    "input_type": "single",
+    "parameters": [
+      {
+        "name": "KEY_COLUMNS",
+        "type": "list",
+        "default": "[\"id\"]",
+        "help": "Columns that together define a duplicate."
+      },
+      {
+        "name": "KEEP",
+        "type": "str",
+        "default": "first",
+        "help": "first | last | none (keep=False drops all duplicates)"
+      },
+      {
+        "name": "DUPLICATES_FILENAME",
+        "type": "str",
+        "default": "duplicates.csv",
+        "help": "File for removed duplicate rows. Empty to discard."
+      },
+      {
+        "name": "OUTPUT_DIR",
+        "type": "str",
+        "default": "./output",
+        "help": "Directory to write output files."
+      },
+      {
+        "name": "OUTPUT_FILENAME",
+        "type": "str",
+        "default": "deduped.csv",
+        "help": "Name of the deduplicated output file."
+      },
+      {
+        "name": "OUTPUT_FORMAT",
+        "type": "str",
+        "default": "csv",
+        "help": "csv | xlsx | json | parquet | tsv"
+      }
+    ]
+  },
+  {
+    "template_name": "file_rename_columns",
+    "display_name": "PS-11 \u2014 Rename Columns",
+    "description": "Rename columns via a mapping dict; optionally drop unmapped columns.",
+    "function_sig": "preprocess(input_path: str) -> str",
+    "input_type": "single",
+    "parameters": [
+      {
+        "name": "COLUMN_MAP",
+        "type": "dict",
+        "default": "{\"OldName\": \"NewName\", \"Col2\": \"Column2\"}",
+        "help": "Dict of {old_name: new_name} pairs."
+      },
+      {
+        "name": "DROP_UNMAPPED",
+        "type": "bool",
+        "default": "False",
+        "help": "If True, only columns present in COLUMN_MAP are kept in the output."
+      },
+      {
+        "name": "OUTPUT_DIR",
+        "type": "str",
+        "default": "./output",
+        "help": "Directory to write the output file."
+      },
+      {
+        "name": "OUTPUT_FILENAME",
+        "type": "str",
+        "default": "renamed.csv",
+        "help": "Name of the output file."
+      },
+      {
+        "name": "OUTPUT_FORMAT",
+        "type": "str",
+        "default": "csv",
+        "help": "csv | xlsx | json | parquet | tsv"
+      }
+    ]
+  },
+  {
+    "template_name": "file_handle_nulls",
+    "display_name": "PS-12 \u2014 Handle Nulls",
+    "description": "Audit and clean null values: fill, drop, or flag per column.",
+    "function_sig": "preprocess(input_path: str) -> str",
+    "input_type": "single",
+    "parameters": [
+      {
+        "name": "NULL_STRATEGIES",
+        "type": "list_of_dicts",
+        "default": "[{\"column\": \"*\", \"strategy\": \"fill_value\", \"value\": \"\"}]",
+        "help": "List of strategies. Each: {\"column\": \"col_or_*\", \"strategy\": \"...\", \"value\": \"optional\"}. Strategies: fill_value, fill_mean, fill_median, fill_mode, fill_forward, fill_backward, drop_row."
+      },
+      {
+        "name": "NULL_AUDIT_FILENAME",
+        "type": "str",
+        "default": "null_audit.csv",
+        "help": "Filename for the pre-clean null audit report. Empty to skip."
+      },
+      {
+        "name": "OUTPUT_DIR",
+        "type": "str",
+        "default": "./output",
+        "help": "Directory to write output files."
+      },
+      {
+        "name": "OUTPUT_FILENAME",
+        "type": "str",
+        "default": "nulls_handled.csv",
+        "help": "Name of the cleaned output file."
+      },
+      {
+        "name": "OUTPUT_FORMAT",
+        "type": "str",
+        "default": "csv",
+        "help": "csv | xlsx | json | parquet | tsv"
+      }
+    ]
+  },
+  {
+    "template_name": "file_cast_types",
+    "display_name": "PS-13 \u2014 Cast Column Types",
+    "description": "Cast columns to target types (int, float, date, bool, str, currency).",
+    "function_sig": "preprocess(input_path: str) -> str",
+    "input_type": "single",
+    "parameters": [
+      {
+        "name": "CAST_RULES",
+        "type": "list_of_dicts",
+        "default": "[{\"column\": \"amount\", \"target_type\": \"float\"}, {\"column\": \"date\", \"target_type\": \"date\", \"date_format\": \"%Y-%m-%d\"}]",
+        "help": "List of cast rules. Each: {\"column\": \"col\", \"target_type\": \"int|float|str|bool|date|currency\", \"date_format\": \"%Y-%m-%d\" (for date type)}."
+      },
+      {
+        "name": "ON_ERROR",
+        "type": "str",
+        "default": "nullify",
+        "help": "nullify | keep_original | drop_row"
+      },
+      {
+        "name": "ERROR_FILENAME",
+        "type": "str",
+        "default": "cast_errors.csv",
+        "help": "File for rows with cast errors. Empty to discard."
+      },
+      {
+        "name": "STRIP_CURRENCY",
+        "type": "bool",
+        "default": "True",
+        "help": "Strip \u00a3$\u20ac and commas before casting currency columns."
+      },
+      {
+        "name": "OUTPUT_DIR",
+        "type": "str",
+        "default": "./output",
+        "help": "Directory to write output files."
+      },
+      {
+        "name": "OUTPUT_FILENAME",
+        "type": "str",
+        "default": "cast.csv",
+        "help": "Name of the output file."
+      },
+      {
+        "name": "OUTPUT_FORMAT",
+        "type": "str",
+        "default": "csv",
+        "help": "csv | xlsx | json | parquet | tsv"
+      }
+    ]
+  },
+  {
+    "template_name": "file_aggregate",
+    "display_name": "PS-14 \u2014 Aggregate / Group-By",
+    "description": "Group rows by key columns and apply aggregate functions per metric column.",
+    "function_sig": "preprocess(input_path: str) -> str",
+    "input_type": "single",
+    "parameters": [
+      {
+        "name": "GROUP_BY_COLUMNS",
+        "type": "list",
+        "default": "[\"category\"]",
+        "help": "Columns to group by."
+      },
+      {
+        "name": "AGGREGATIONS",
+        "type": "list_of_dicts",
+        "default": "[{\"column\": \"amount\", \"function\": \"sum\", \"output_column\": \"total_amount\"}]",
+        "help": "Aggregation rules. Each: {\"column\": \"col\", \"function\": \"sum|mean|min|max|count|first|last|concat\", \"output_column\": \"result_col\"}."
+      },
+      {
+        "name": "OUTPUT_DIR",
+        "type": "str",
+        "default": "./output",
+        "help": "Directory to write the output file."
+      },
+      {
+        "name": "OUTPUT_FILENAME",
+        "type": "str",
+        "default": "aggregated.csv",
+        "help": "Name of the output file."
+      },
+      {
+        "name": "OUTPUT_FORMAT",
+        "type": "str",
+        "default": "csv",
+        "help": "csv | xlsx | json | parquet | tsv"
+      }
+    ]
+  },
+  {
+    "template_name": "file_delta_load",
+    "display_name": "PS-15 \u2014 Delta Load (Change Detection)",
+    "description": "Compare a new file against an old file and tag rows as NEW / DELETED / CHANGED / UNCHANGED.",
+    "function_sig": "preprocess(new_path: str, old_path: str) -> str",
+    "input_type": "multi",
+    "parameters": [
+      {
+        "name": "KEY_COLUMNS",
+        "type": "list",
+        "default": "[\"id\"]",
+        "help": "Columns that uniquely identify a record."
+      },
+      {
+        "name": "COMPARE_COLUMNS",
+        "type": "list",
+        "default": "[]",
+        "help": "Columns to check for changes. Empty list = compare ALL non-key columns."
+      },
+      {
+        "name": "DELTA_MODE",
+        "type": "str",
+        "default": "all",
+        "help": "all | new_only | deleted_only | changed_only | unchanged_only"
+      },
+      {
+        "name": "DELTA_TAG_COLUMN",
+        "type": "str",
+        "default": "_delta",
+        "help": "Name of the tag column added to every output row."
+      },
+      {
+        "name": "OUTPUT_DIR",
+        "type": "str",
+        "default": "./output",
+        "help": "Directory to write the output file."
+      },
+      {
+        "name": "OUTPUT_FILENAME",
+        "type": "str",
+        "default": "delta.csv",
+        "help": "Name of the output file."
+      },
+      {
+        "name": "OUTPUT_FORMAT",
+        "type": "str",
+        "default": "csv",
+        "help": "csv | xlsx | json | parquet | tsv"
+      }
+    ]
+  },
+  {
+    "template_name": "file_rank_filter",
+    "display_name": "PS-16 \u2014 Rank & Filter (Top-N per Group)",
+    "description": "Rank rows within groups (or globally), keep top-N, optionally write discarded rows.",
+    "function_sig": "preprocess(input_path: str) -> str",
+    "input_type": "single",
+    "parameters": [
+      {
+        "name": "PARTITION_BY",
+        "type": "list",
+        "default": "[\"category\"]",
+        "help": "Columns to group by before ranking. Empty list [] = global rank (no grouping)."
+      },
+      {
+        "name": "RANK_BY_COLUMN",
+        "type": "str",
+        "default": "score",
+        "help": "Column whose values determine the rank."
+      },
+      {
+        "name": "RANK_ORDER",
+        "type": "str",
+        "default": "desc",
+        "help": "asc (rank 1 = smallest) | desc (rank 1 = largest)."
+      },
+      {
+        "name": "RANK_METHOD",
+        "type": "str",
+        "default": "row_number",
+        "help": "row_number (unique sequential) | rank (tied rows share same rank) | dense_rank (no gaps)."
+      },
+      {
+        "name": "RANK_COLUMN_NAME",
+        "type": "str",
+        "default": "_rank",
+        "help": "Name of the rank column added to the output."
+      },
+      {
+        "name": "KEEP_TOP_N",
+        "type": "int",
+        "default": "1",
+        "help": "Keep only rows with rank <= N. Set to 0 to keep all rows (just add rank column)."
+      },
+      {
+        "name": "DISCARD_FILENAME",
+        "type": "str",
+        "default": "discarded.csv",
+        "help": "File for rows that don't make the top-N cut. Empty string to silently drop."
+      },
+      {
+        "name": "OUTPUT_DIR",
+        "type": "str",
+        "default": "./output",
+        "help": "Directory to write output files."
+      },
+      {
+        "name": "OUTPUT_FILENAME",
+        "type": "str",
+        "default": "ranked.csv",
+        "help": "Name of the main (top-N) output file."
+      },
+      {
+        "name": "OUTPUT_FORMAT",
+        "type": "str",
+        "default": "csv",
+        "help": "csv | xlsx | json | parquet | tsv"
+      }
+    ]
+  },
+  {
+    "template_name": "file_filter_by_values",
+    "display_name": "PS-17 \u2014 Filter by Value List",
+    "description": "Route rows to named files by matching a column against value lists. Unmatched rows go to an 'others' file.",
+    "function_sig": "preprocess(input_path: str) -> str",
+    "input_type": "single",
+    "parameters": [
+      {
+        "name": "FILTER_COLUMN",
+        "type": "str",
+        "default": "status",
+        "help": "Column to match against each group's value list."
+      },
+      {
+        "name": "VALUE_GROUPS",
+        "type": "list_of_dicts",
+        "default": "[{\"values\": [\"ACTIVE\", \"APPROVED\"], \"output_filename\": \"active.csv\"}, {\"values\": [\"CLOSED\"], \"output_filename\": \"closed.csv\"}]",
+        "help": "List of routing groups (first-match-wins). Each: {\"values\": [\"VAL1\", \"VAL2\"], \"output_filename\": \"name.csv\"}."
+      },
+      {
+        "name": "CASE_SENSITIVE",
+        "type": "bool",
+        "default": "False",
+        "help": "If False, matching is case-insensitive."
+      },
+      {
+        "name": "OTHERS_FILENAME",
+        "type": "str",
+        "default": "others.csv",
+        "help": "File for rows that match no group (including nulls). Empty string to discard."
+      },
+      {
+        "name": "OUTPUT_DIR",
+        "type": "str",
+        "default": "./output",
+        "help": "Directory to write output files."
+      },
+      {
+        "name": "OUTPUT_FORMAT",
+        "type": "str",
+        "default": "csv",
+        "help": "csv | xlsx | json | parquet | tsv"
+      }
+    ]
+  }
+]
