@@ -518,8 +518,9 @@ _MAX_FOLDER_FILES = 10   # hard limit on files per folder scan
 # ---------------------------------------------------------------------------
 # Folder scan cache — keyed on (folder_path, folder_mtime) so rescanning
 # a folder that hasn't changed on disk is instant.
+# Stores raw data only (no gr.update() objects — those are single-use).
 # ---------------------------------------------------------------------------
-_scan_cache: dict[tuple, tuple] = {}
+_scan_cache: dict[tuple, dict] = {}
 
 
 def _scan_one_file(fpath: Path) -> dict:
@@ -603,7 +604,7 @@ def scan_folder(folder_path: str):
     folder_mtime = folder.stat().st_mtime
     cache_key    = (str(folder), folder_mtime)
     if cache_key in _scan_cache:
-        return _scan_cache[cache_key]
+        return _make_scan_result(_scan_cache[cache_key])
 
     # ── Parallel scan ────────────────────────────────────────────────────────
     results_by_name: dict[str, dict] = {}
@@ -690,16 +691,31 @@ def scan_folder(folder_path: str):
     )
 
     filenames = list(file_data.keys())
-    result = (
-        summary_html,
+    # Cache raw data only — gr.update() objects are single-use Gradio descriptors
+    # and must be freshly created on every return.
+    _scan_cache[cache_key] = {
+        "summary_html":      summary_html,
+        "filenames":         filenames,
+        "file_data_json":    json.dumps(file_data),
+        "cols_info_html":    cols_info_html,
+        "filename_choices":  filename_choices,
+        "base_location":     str(folder),
+    }
+    return _make_scan_result(_scan_cache[cache_key])
+
+
+def _make_scan_result(cached: dict) -> tuple:
+    """Reconstruct the scan return tuple from cached raw data (fresh gr.update() each time)."""
+    filenames        = cached["filenames"]
+    filename_choices = cached["filename_choices"]
+    return (
+        cached["summary_html"],
         gr.update(choices=filenames, value=filenames[0] if filenames else None),
-        json.dumps(file_data),
-        cols_info_html,
+        cached["file_data_json"],
+        cached["cols_info_html"],
         gr.update(choices=filename_choices, value="(none)"),
-        str(folder),     # base_location
+        cached["base_location"],
     )
-    _scan_cache[cache_key] = result
-    return result
 
 
 def show_file_detail(selected_name: str, file_data_json: str):
@@ -1410,7 +1426,6 @@ def run_script(
 
 def build_ui() -> gr.Blocks:
     with gr.Blocks(title="Preprocessing Script Library", theme=gr.themes.Soft()) as app:
-        app.queue(default_concurrency_limit=4)
 
         gr.Markdown(
             "# Preprocessing Script Library\n"
@@ -1666,6 +1681,8 @@ def build_ui() -> gr.Blocks:
             outputs=[template_desc_html, params_json_box, param_help_html],
         )
 
+    # queue() must be called AFTER the with-block closes, not inside it
+    app.queue(default_concurrency_limit=4)
     return app
 
 
