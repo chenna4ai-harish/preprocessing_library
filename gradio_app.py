@@ -222,7 +222,12 @@ TEMPLATE_CATALOG: dict[str, dict] = {
         "function_sig": "preprocess(input_paths: list) -> str",
         "input_type":   "two",
         "parameters": [
-            {"name": "JOIN_KEYS",       "type": "list", "default": '["id", "date"]',    "help": "List of columns to join on. ← pick from columns"},
+            {"name": "JOIN_KEYS",       "type": "list", "default": '["id", "date"]',
+             "help": "Key column names shared by both files. Leave LEFT_KEYS/RIGHT_KEYS blank to use this for both sides."},
+            {"name": "LEFT_KEYS",       "type": "list", "default": '[]',
+             "help": "Key columns in the LEFT file. Leave empty to use JOIN_KEYS. Use when left and right files have different column names for the same concept."},
+            {"name": "RIGHT_KEYS",      "type": "list", "default": '[]',
+             "help": "Key columns in the RIGHT file. Leave empty to use JOIN_KEYS. Must have the same length as LEFT_KEYS when specified."},
             {"name": "JOIN_TYPE",       "type": "str",  "default": "inner",              "help": "inner | left | right | outer"},
             {"name": "LEFT_SUFFIX",     "type": "str",  "default": "_left",              "help": "Suffix for overlapping columns from the left file."},
             {"name": "RIGHT_SUFFIX",    "type": "str",  "default": "_right",             "help": "Suffix for overlapping columns from the right file."},
@@ -2246,8 +2251,11 @@ def build_ui() -> gr.Blocks:
 
             return (
                 desc, params, help_html,
-                gr.update(label=lbl1), gr.update(label=lbl2),
-                gr.update(visible=vis2),
+                gr.update(label=f"{lbl1} — select from scanned folder"),  # file1_dropdown
+                gr.update(label=lbl1),                                     # file1_text
+                gr.update(label=f"{lbl2} — select from scanned folder"),  # file2_dropdown
+                gr.update(label=lbl2),                                     # file2_text
+                vis2,   # file2_row — vis2 is already gr.update(visible=...), don't double-wrap
                 lod_upd, lod_label, lod_param,
                 _step_indicator_html(2), 2,
             )
@@ -2256,7 +2264,7 @@ def build_ui() -> gr.Blocks:
             fn=_on_template_change,
             inputs=[template_dropdown, file1_text, base_location_state],
             outputs=[template_desc_html, params_json_box, param_help_html,
-                     file1_text, file2_text, file2_row,
+                     file1_dropdown, file1_text, file2_dropdown, file2_text, file2_row,
                      lod_editor, lod_label_html, lod_param_key_state,
                      step_html, step_state],
         )

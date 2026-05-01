@@ -239,10 +239,13 @@ class TestAllTemplates(unittest.TestCase):
         right = _make_csv(data_dir, "right.csv",
                           "region,product,target\nNorth,Widget,90\nSouth,Gadget,180\nNorth,Gadget,60\n")
 
+        # Sub-test A: same key names on both sides (LEFT_KEYS/RIGHT_KEYS empty)
         result = _run_template(
             "file_join_multi_key",
             {
                 "JOIN_KEYS":       '["region", "product"]',
+                "LEFT_KEYS":       '[]',
+                "RIGHT_KEYS":      '[]',
                 "JOIN_TYPE":       "inner",
                 "LEFT_SUFFIX":     "_l",
                 "RIGHT_SUFFIX":    "_r",
@@ -255,9 +258,35 @@ class TestAllTemplates(unittest.TestCase):
             [left, right],
             scripts_dir,
         )
-
         self.assertTrue(Path(result).is_file(), f"Output file not found: {result}")
         self.assertGreater(_count_data_rows(result), 0)
+
+        # Sub-test B: different key column names (LEFT_KEYS / RIGHT_KEYS override)
+        left2  = _make_csv(data_dir, "orders.csv",
+                           "ord_region,ord_product,amount\nNorth,Widget,500\nSouth,Gadget,800\n")
+        right2 = _make_csv(data_dir, "targets.csv",
+                           "region,product,quota\nNorth,Widget,450\nSouth,Gadget,750\n")
+        out_dir2 = self._tmp()
+        result2 = _run_template(
+            "file_join_multi_key",
+            {
+                "JOIN_KEYS":       '["ord_region", "ord_product"]',
+                "LEFT_KEYS":       '["ord_region", "ord_product"]',
+                "RIGHT_KEYS":      '["region", "product"]',
+                "JOIN_TYPE":       "inner",
+                "LEFT_SUFFIX":     "_l",
+                "RIGHT_SUFFIX":    "_r",
+                "LEFT_FILENAME":   "orders.csv",
+                "RIGHT_FILENAME":  "targets.csv",
+                "OUTPUT_DIR":      out_dir2,
+                "OUTPUT_FILENAME": "cross_key_joined.csv",
+                "OUTPUT_FORMAT":   "csv",
+            },
+            [left2, right2],
+            scripts_dir,
+        )
+        self.assertTrue(Path(result2).is_file(), f"Cross-key output not found: {result2}")
+        self.assertGreater(_count_data_rows(result2), 0)
 
     # ------------------------------------------------------------------
     # PS-06  file_denormalize
