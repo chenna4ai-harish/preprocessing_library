@@ -1681,8 +1681,12 @@ def build_ui() -> gr.Blocks:
             outputs=[template_desc_html, params_json_box, param_help_html],
         )
 
-    # queue() must be called AFTER the with-block closes, not inside it
-    app.queue(default_concurrency_limit=4)
+    # queue() — Gradio 4+ enables it by default; explicit call keeps concurrency
+    # cap on older versions. Guard against double-init on some Gradio builds.
+    try:
+        app.queue(default_concurrency_limit=4)
+    except Exception:
+        pass
     return app
 
 
