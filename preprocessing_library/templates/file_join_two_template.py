@@ -18,7 +18,9 @@ from pathlib import Path as _Path
 import pandas as pd
 
 # ── Configuration (substituted at generation time) ────────────────────────────
-JOIN_KEY        = "{{JOIN_KEY}}"
+JOIN_KEY        = "{{JOIN_KEY}}"         # shared key column name (used when LEFT_KEY/RIGHT_KEY are empty)
+LEFT_KEY        = "{{LEFT_KEY}}"         # override: join key column in the LEFT file  (empty = use JOIN_KEY)
+RIGHT_KEY       = "{{RIGHT_KEY}}"        # override: join key column in the RIGHT file (empty = use JOIN_KEY)
 JOIN_TYPE       = "{{JOIN_TYPE}}"
 LEFT_SUFFIX     = "{{LEFT_SUFFIX}}"
 RIGHT_SUFFIX    = "{{RIGHT_SUFFIX}}"
@@ -156,17 +158,41 @@ def preprocess(input_paths: list) -> str:
     left  = _load_file(left_path)
     right = _load_file(right_path)
 
-    if JOIN_KEY not in left.columns:
-        raise KeyError(f"JOIN_KEY '{JOIN_KEY}' not found in left file: {LEFT_FILENAME}")
-    if JOIN_KEY not in right.columns:
-        raise KeyError(f"JOIN_KEY '{JOIN_KEY}' not found in right file: {RIGHT_FILENAME}")
+    # Resolve effective join keys:
+    # LEFT_KEY / RIGHT_KEY override JOIN_KEY when different column names are used.
+    left_key  = LEFT_KEY  if LEFT_KEY  else JOIN_KEY
+    right_key = RIGHT_KEY if RIGHT_KEY else JOIN_KEY
 
-    merged = left.merge(
-        right,
-        on=JOIN_KEY,
-        how=JOIN_TYPE,
-        suffixes=(LEFT_SUFFIX, RIGHT_SUFFIX),
-    )
+    if left_key not in left.columns:
+        raise KeyError(
+            f"Join key '{left_key}' not found in left file ({LEFT_FILENAME}). "
+            f"Available columns: {list(left.columns)}"
+        )
+    if right_key not in right.columns:
+        raise KeyError(
+            f"Join key '{right_key}' not found in right file ({RIGHT_FILENAME}). "
+            f"Available columns: {list(right.columns)}"
+        )
+
+    # Same key name on both sides → use on=; different names → use left_on/right_on
+    if left_key == right_key:
+        merged = left.merge(
+            right,
+            on=left_key,
+            how=JOIN_TYPE,
+            suffixes=(LEFT_SUFFIX, RIGHT_SUFFIX),
+        )
+    else:
+        merged = left.merge(
+            right,
+            left_on=left_key,
+            right_on=right_key,
+            how=JOIN_TYPE,
+            suffixes=(LEFT_SUFFIX, RIGHT_SUFFIX),
+        )
+        # Drop the duplicate right key column (pandas keeps it as right_key when using left_on/right_on)
+        if right_key in merged.columns and right_key != left_key:
+            merged = merged.drop(columns=[right_key])
 
     _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_paths[0]))
     out_path = os.path.join(_out_dir, OUTPUT_FILENAME)
