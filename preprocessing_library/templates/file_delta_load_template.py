@@ -4,7 +4,7 @@ Template : file_delta_load  |  PS-15
 Purpose  : Compare a current file against a baseline file and extract only
            records that are new, changed, or deleted.
            A DELTA_STATUS_COLUMN is added: 'NEW' | 'CHANGED' | 'DELETED'.
-Contract : preprocess(input_paths: list) -> str
+Contract : preprocess(input_paths: list) -> list
            input_paths[0] = current (new) file
            input_paths[1] = baseline (previous) file
 
@@ -179,7 +179,7 @@ def _insert_column_after(df: pd.DataFrame, col: str, after: str) -> pd.DataFrame
     return df[cols]
 
 
-def preprocess(input_paths: list) -> str:
+def preprocess(input_paths: list) -> list:
     """
     Compare NEW_FILENAME (current) against OLD_FILENAME (baseline) and
     extract delta records according to DELTA_MODE.
@@ -201,8 +201,8 @@ def preprocess(input_paths: list) -> str:
 
     Returns
     -------
-    str
-        Absolute path to the delta output file.
+    list[str]
+        List containing the absolute path to the delta output file.
     """
     if len(input_paths) < 2:
         raise ValueError(
@@ -300,4 +300,4 @@ def preprocess(input_paths: list) -> str:
 
     _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_paths[0]))
     out_path = os.path.join(_out_dir, OUTPUT_FILENAME)
-    return _write_output(result, out_path, OUTPUT_FORMAT)
+    return [_write_output(result, out_path, OUTPUT_FORMAT)]

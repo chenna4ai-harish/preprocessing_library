@@ -4,7 +4,7 @@ Template : file_join_multi_key  |  PS-05
 Purpose  : Join two files on a composite (multi-column) key.
            input_paths[0] = left file
            input_paths[1] = right file
-Contract : preprocess(input_paths: list) -> str
+Contract : preprocess(input_paths: list) -> list
 """
 from __future__ import annotations
 
@@ -173,7 +173,7 @@ def _insert_column_after(df: pd.DataFrame, col: str, after: str) -> pd.DataFrame
     return df[cols]
 
 
-def preprocess(input_paths: list) -> str:
+def preprocess(input_paths: list) -> list:
     """
     Join LEFT_FILENAME and RIGHT_FILENAME on all columns in JOIN_KEYS
     simultaneously (composite key join).
@@ -186,8 +186,8 @@ def preprocess(input_paths: list) -> str:
 
     Returns
     -------
-    str
-        Absolute path to the merged output file.
+    list[str]
+        List containing the absolute path to the merged output file.
     """
     if len(input_paths) < 2:
         raise ValueError(
@@ -251,4 +251,4 @@ def preprocess(input_paths: list) -> str:
 
     _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_paths[0]))
     out_path = os.path.join(_out_dir, OUTPUT_FILENAME)
-    return _write_output(merged, out_path, OUTPUT_FORMAT)
+    return [_write_output(merged, out_path, OUTPUT_FORMAT)]

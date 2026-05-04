@@ -5,7 +5,7 @@ Purpose  : Flatten a normalised master-detail relationship into a single wide fi
            input_paths[0] = master file  (e.g. customers)
            input_paths[1] = detail file  (e.g. invoices)
            All detail columns (except JOIN_KEY) are prefixed with DETAIL_PREFIX.
-Contract : preprocess(input_paths: list) -> str
+Contract : preprocess(input_paths: list) -> list
 """
 from __future__ import annotations
 
@@ -175,7 +175,7 @@ def _insert_column_after(df: pd.DataFrame, col: str, after: str) -> pd.DataFrame
     return df[cols]
 
 
-def preprocess(input_paths: list) -> str:
+def preprocess(input_paths: list) -> list:
     """
     Flatten HEADER_FILENAME (master) + DETAIL_FILENAME (detail) into one wide file.
     All detail columns (except JOIN_KEY) are prefixed with DETAIL_PREFIX so
@@ -189,8 +189,8 @@ def preprocess(input_paths: list) -> str:
 
     Returns
     -------
-    str
-        Absolute path to the flat output file.
+    list[str]
+        List containing the absolute path to the flat output file.
     """
     if len(input_paths) < 2:
         raise ValueError(
@@ -245,4 +245,4 @@ def preprocess(input_paths: list) -> str:
 
     _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_paths[0]))
     out_path = os.path.join(_out_dir, OUTPUT_FILENAME)
-    return _write_output(result, out_path, OUTPUT_FORMAT)
+    return [_write_output(result, out_path, OUTPUT_FORMAT)]
