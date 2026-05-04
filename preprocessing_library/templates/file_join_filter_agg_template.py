@@ -5,7 +5,7 @@ Purpose  : Join two files → apply WHERE filter on joined result →
            group-by aggregate (count / sum / mean / etc.) →
            optionally rank the aggregated rows and keep top-N.
 
-Contract : preprocess(input_paths: list) -> str
+Contract : preprocess(input_paths: list) -> list
 
 Steps
 -----
@@ -262,7 +262,7 @@ def _apply_aggregations(df: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
-def preprocess(input_paths: list) -> str:
+def preprocess(input_paths: list) -> list:
     """
     Join LEFT_FILENAME + RIGHT_FILENAME, filter, aggregate, rank, write output.
 
@@ -274,8 +274,8 @@ def preprocess(input_paths: list) -> str:
 
     Returns
     -------
-    str
-        Absolute path to the output file.
+    list[str]
+        List containing the absolute path to the output file.
     """
     if len(input_paths) < 2:
         raise ValueError(
@@ -340,4 +340,4 @@ def preprocess(input_paths: list) -> str:
 
     _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_paths[0]))
     out_path = os.path.join(_out_dir, OUTPUT_FILENAME)
-    return _write_output(result, out_path, OUTPUT_FORMAT)
+    return [_write_output(result, out_path, OUTPUT_FORMAT)]
