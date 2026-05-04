@@ -45,20 +45,31 @@ from pathlib import Path as _Path
 import pandas as pd
 
 # ── Configuration (substituted at generation time) ────────────────────────────
-JOIN_KEYS         = {{JOIN_KEYS}}
-JOIN_TYPE         = "{{JOIN_TYPE}}"
-LEFT_FILENAME     = "{{LEFT_FILENAME}}"    # file name for the left (primary) file
-RIGHT_FILENAME    = "{{RIGHT_FILENAME}}"   # file name for the right file
-WHERE_CONDITION   = "{{WHERE_CONDITION}}"  # pandas query() on joined result; "" = no filter
-GROUP_BY_COLUMNS  = {{GROUP_BY_COLUMNS}}
-AGGREGATIONS      = {{AGGREGATIONS}}
-RANK_BY_COLUMN    = "{{RANK_BY_COLUMN}}"   # "" = skip ranking
-RANK_ORDER        = "{{RANK_ORDER}}"       # asc | desc
-RANK_COLUMN_NAME  = "{{RANK_COLUMN_NAME}}"
-KEEP_TOP_N        = {{KEEP_TOP_N}}         # 0 = keep all rows
-OUTPUT_DIR        = "{{OUTPUT_DIR}}"
-OUTPUT_FILENAME   = "{{OUTPUT_FILENAME}}"
-OUTPUT_FORMAT     = "{{OUTPUT_FORMAT}}"
+LEFT_FILENAME        = "{{LEFT_FILENAME}}"        # file name for the left (primary) file
+RIGHT_FILENAME       = "{{RIGHT_FILENAME}}"       # file name for the right file
+LEFT_USECOLS         = {{LEFT_USECOLS}}            # columns to load from LEFT file; [] = all
+RIGHT_USECOLS        = {{RIGHT_USECOLS}}           # columns to load from RIGHT file; [] = all
+LEFT_INNER_FILE      = "{{LEFT_INNER_FILE}}"       # when LEFT is a ZIP, extract this inner file; "" = first file
+RIGHT_INNER_FILE     = "{{RIGHT_INNER_FILE}}"      # when RIGHT is a ZIP, extract this inner file; "" = first file
+DEDUP_RIGHT_BY       = "{{DEDUP_RIGHT_BY}}"        # dedup RIGHT file on this column before join; "" = skip
+DEDUP_KEEP           = "{{DEDUP_KEEP}}"            # "first" | "last"
+JOIN_KEYS            = {{JOIN_KEYS}}
+JOIN_TYPE            = "{{JOIN_TYPE}}"
+LEFT_SUFFIX          = "{{LEFT_SUFFIX}}"
+RIGHT_SUFFIX         = "{{RIGHT_SUFFIX}}"
+WHERE_CONDITION      = "{{WHERE_CONDITION}}"       # pandas query() on joined result; "" = no filter
+GROUP_BY_COLUMNS     = {{GROUP_BY_COLUMNS}}
+AGGREGATIONS         = {{AGGREGATIONS}}
+RANK_BY_COLUMN       = "{{RANK_BY_COLUMN}}"        # "" = skip ranking
+RANK_ORDER           = "{{RANK_ORDER}}"            # asc | desc
+RANK_COLUMN_NAME     = "{{RANK_COLUMN_NAME}}"
+KEEP_TOP_N           = {{KEEP_TOP_N}}              # 0 = keep all rows
+OUTPUT_DROP_COLUMNS  = {{OUTPUT_DROP_COLUMNS}}     # columns to drop from final result; [] = keep all
+INSERT_COLUMN        = "{{INSERT_COLUMN}}"         # move this column after INSERT_AFTER_COLUMN; "" = skip
+INSERT_AFTER_COLUMN  = "{{INSERT_AFTER_COLUMN}}"
+OUTPUT_DIR           = "{{OUTPUT_DIR}}"
+OUTPUT_FILENAME      = "{{OUTPUT_FILENAME}}"
+OUTPUT_FORMAT        = "{{OUTPUT_FORMAT}}"
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -66,10 +77,10 @@ OUTPUT_FORMAT     = "{{OUTPUT_FORMAT}}"
 _ENCODINGS = ["utf-8", "cp1252", "latin-1"]
 
 
-def _load_file(file_path: str) -> pd.DataFrame:
+def _load_file(file_path: str, inner_name: str = "") -> pd.DataFrame:
     ext = _Path(file_path).suffix.lower()
     if ext == ".zip":
-        return _load_zip(file_path)
+        return _load_zip(file_path, inner_name)
     if ext == ".xlsx":
         return pd.read_excel(file_path, engine="openpyxl")
     if ext == ".xls":
@@ -122,10 +133,18 @@ def _load_xml(file_path: str) -> pd.DataFrame:
     return pd.DataFrame(records)
 
 
-def _load_zip(file_path: str) -> pd.DataFrame:
+def _load_zip(file_path: str, inner_name: str = "") -> pd.DataFrame:
     _supported = {".csv", ".tsv", ".txt", ".xlsx", ".xls", ".json", ".xml"}
     with _zipfile.ZipFile(file_path, "r") as z:
-        for name in z.namelist():
+        names = z.namelist()
+        if inner_name:
+            for name in names:
+                if os.path.basename(name).lower() == inner_name.lower():
+                    with _tempfile.TemporaryDirectory() as tmp_dir:
+                        z.extract(name, tmp_dir)
+                        return _load_file(os.path.join(tmp_dir, name))
+            raise ValueError(f"'{inner_name}' not found inside ZIP: {file_path}")
+        for name in names:
             if _Path(name).suffix.lower() in _supported:
                 with _tempfile.TemporaryDirectory() as tmp_dir:
                     z.extract(name, tmp_dir)
@@ -160,6 +179,30 @@ def _find_input_file(input_paths: list, filename: str, fallback_idx: int = 0) ->
         if _Path(p).name == filename:
             return p
     return input_paths[fallback_idx]
+
+
+def _apply_usecols(df: pd.DataFrame, usecols: list) -> pd.DataFrame:
+    if usecols:
+        keep = [c for c in usecols if c in df.columns]
+        return df[keep]
+    return df
+
+
+def _drop_columns(df: pd.DataFrame, cols: list) -> pd.DataFrame:
+    if cols:
+        to_drop = [c for c in cols if c in df.columns]
+        return df.drop(columns=to_drop)
+    return df
+
+
+def _insert_column_after(df: pd.DataFrame, col: str, after: str) -> pd.DataFrame:
+    if not col or col not in df.columns or not after or after not in df.columns:
+        return df
+    cols = list(df.columns)
+    cols.remove(col)
+    idx = cols.index(after)
+    cols.insert(idx + 1, col)
+    return df[cols]
 
 
 def _apply_aggregations(df: pd.DataFrame) -> pd.DataFrame:
@@ -242,8 +285,11 @@ def preprocess(input_paths: list) -> str:
     # ── Step 1: Load files by name ────────────────────────────────────────
     left_path  = _find_input_file(input_paths, LEFT_FILENAME,  0)
     right_path = _find_input_file(input_paths, RIGHT_FILENAME, 1)
-    left  = _load_file(left_path)
-    right = _load_file(right_path)
+    left  = _apply_usecols(_load_file(left_path,  LEFT_INNER_FILE),  LEFT_USECOLS)
+    right = _apply_usecols(_load_file(right_path, RIGHT_INNER_FILE), RIGHT_USECOLS)
+
+    if DEDUP_RIGHT_BY and DEDUP_RIGHT_BY in right.columns:
+        right = right.drop_duplicates(subset=DEDUP_RIGHT_BY, keep=DEDUP_KEEP or "first")
 
     # ── Step 2: Join ──────────────────────────────────────────────────────
     join_on = JOIN_KEYS[0] if len(JOIN_KEYS) == 1 else JOIN_KEYS
@@ -288,7 +334,10 @@ def preprocess(input_paths: list) -> str:
         if KEEP_TOP_N and KEEP_TOP_N > 0:
             result = result[result[RANK_COLUMN_NAME] <= KEEP_TOP_N].reset_index(drop=True)
 
-    # ── Step 6: Write output ──────────────────────────────────────────────
+    # ── Step 6: Drop columns / reorder / write output ─────────────────────
+    result = _drop_columns(result, OUTPUT_DROP_COLUMNS)
+    result = _insert_column_after(result, INSERT_COLUMN, INSERT_AFTER_COLUMN)
+
     _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_paths[0]))
     out_path = os.path.join(_out_dir, OUTPUT_FILENAME)
     return _write_output(result, out_path, OUTPUT_FORMAT)

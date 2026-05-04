@@ -19,14 +19,27 @@ from pathlib import Path as _Path
 import pandas as pd
 
 # ── Configuration (substituted at generation time) ────────────────────────────
-JOIN_KEY          = "{{JOIN_KEY}}"
-JOIN_TYPE         = "{{JOIN_TYPE}}"
-DETAIL_PREFIX     = "{{DETAIL_PREFIX}}"
-HEADER_FILENAME   = "{{HEADER_FILENAME}}"   # file name for the header (master) file
-DETAIL_FILENAME   = "{{DETAIL_FILENAME}}"   # file name for the detail file
-OUTPUT_DIR        = "{{OUTPUT_DIR}}"
-OUTPUT_FILENAME   = "{{OUTPUT_FILENAME}}"
-OUTPUT_FORMAT     = "{{OUTPUT_FORMAT}}"
+HEADER_FILENAME      = "{{HEADER_FILENAME}}"      # file name for the header (master) file
+DETAIL_FILENAME      = "{{DETAIL_FILENAME}}"      # file name for the detail file
+LEFT_USECOLS         = {{LEFT_USECOLS}}            # columns to load from HEADER file; [] = all
+RIGHT_USECOLS        = {{RIGHT_USECOLS}}           # columns to load from DETAIL file; [] = all
+LEFT_INNER_FILE      = "{{LEFT_INNER_FILE}}"       # when HEADER is a ZIP, extract this inner file; "" = first file
+RIGHT_INNER_FILE     = "{{RIGHT_INNER_FILE}}"      # when DETAIL is a ZIP, extract this inner file; "" = first file
+DEDUP_RIGHT_BY       = "{{DEDUP_RIGHT_BY}}"        # dedup DETAIL file on this column before join; "" = skip
+DEDUP_KEEP           = "{{DEDUP_KEEP}}"            # "first" | "last"
+JOIN_KEY             = "{{JOIN_KEY}}"
+LEFT_KEY             = "{{LEFT_KEY}}"              # override: join key in HEADER file; "" = use JOIN_KEY
+RIGHT_KEY            = "{{RIGHT_KEY}}"             # override: join key in DETAIL file; "" = use JOIN_KEY
+JOIN_TYPE            = "{{JOIN_TYPE}}"
+LEFT_SUFFIX          = "{{LEFT_SUFFIX}}"
+RIGHT_SUFFIX         = "{{RIGHT_SUFFIX}}"
+DETAIL_PREFIX        = "{{DETAIL_PREFIX}}"
+OUTPUT_DROP_COLUMNS  = {{OUTPUT_DROP_COLUMNS}}     # columns to drop from result; [] = keep all
+INSERT_COLUMN        = "{{INSERT_COLUMN}}"         # move this column after INSERT_AFTER_COLUMN; "" = skip
+INSERT_AFTER_COLUMN  = "{{INSERT_AFTER_COLUMN}}"
+OUTPUT_DIR           = "{{OUTPUT_DIR}}"
+OUTPUT_FILENAME      = "{{OUTPUT_FILENAME}}"
+OUTPUT_FORMAT        = "{{OUTPUT_FORMAT}}"
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -34,10 +47,10 @@ OUTPUT_FORMAT     = "{{OUTPUT_FORMAT}}"
 _ENCODINGS = ["utf-8", "cp1252", "latin-1"]
 
 
-def _load_file(file_path: str) -> pd.DataFrame:
+def _load_file(file_path: str, inner_name: str = "") -> pd.DataFrame:
     ext = _Path(file_path).suffix.lower()
     if ext == ".zip":
-        return _load_zip(file_path)
+        return _load_zip(file_path, inner_name)
     if ext == ".xlsx":
         return pd.read_excel(file_path, engine="openpyxl")
     if ext == ".xls":
@@ -90,10 +103,18 @@ def _load_xml(file_path: str) -> pd.DataFrame:
     return pd.DataFrame(records)
 
 
-def _load_zip(file_path: str) -> pd.DataFrame:
+def _load_zip(file_path: str, inner_name: str = "") -> pd.DataFrame:
     _supported = {".csv", ".tsv", ".txt", ".xlsx", ".xls", ".json", ".xml"}
     with _zipfile.ZipFile(file_path, "r") as z:
-        for name in z.namelist():
+        names = z.namelist()
+        if inner_name:
+            for name in names:
+                if os.path.basename(name).lower() == inner_name.lower():
+                    with _tempfile.TemporaryDirectory() as tmp_dir:
+                        z.extract(name, tmp_dir)
+                        return _load_file(os.path.join(tmp_dir, name))
+            raise ValueError(f"'{inner_name}' not found inside ZIP: {file_path}")
+        for name in names:
             if _Path(name).suffix.lower() in _supported:
                 with _tempfile.TemporaryDirectory() as tmp_dir:
                     z.extract(name, tmp_dir)
@@ -130,6 +151,30 @@ def _find_input_file(input_paths: list, filename: str, fallback_idx: int = 0) ->
     return input_paths[fallback_idx]
 
 
+def _apply_usecols(df: pd.DataFrame, usecols: list) -> pd.DataFrame:
+    if usecols:
+        keep = [c for c in usecols if c in df.columns]
+        return df[keep]
+    return df
+
+
+def _drop_columns(df: pd.DataFrame, cols: list) -> pd.DataFrame:
+    if cols:
+        to_drop = [c for c in cols if c in df.columns]
+        return df.drop(columns=to_drop)
+    return df
+
+
+def _insert_column_after(df: pd.DataFrame, col: str, after: str) -> pd.DataFrame:
+    if not col or col not in df.columns or not after or after not in df.columns:
+        return df
+    cols = list(df.columns)
+    cols.remove(col)
+    idx = cols.index(after)
+    cols.insert(idx + 1, col)
+    return df[cols]
+
+
 def preprocess(input_paths: list) -> str:
     """
     Flatten HEADER_FILENAME (master) + DETAIL_FILENAME (detail) into one wide file.
@@ -154,22 +199,49 @@ def preprocess(input_paths: list) -> str:
 
     header_path = _find_input_file(input_paths, HEADER_FILENAME, 0)
     detail_path = _find_input_file(input_paths, DETAIL_FILENAME, 1)
-    master = _load_file(header_path)
-    detail = _load_file(detail_path)
+    master = _apply_usecols(_load_file(header_path, LEFT_INNER_FILE),  LEFT_USECOLS)
+    detail = _apply_usecols(_load_file(detail_path, RIGHT_INNER_FILE), RIGHT_USECOLS)
 
-    if JOIN_KEY not in master.columns:
-        raise KeyError(f"JOIN_KEY '{JOIN_KEY}' not found in header file: {HEADER_FILENAME}")
-    if JOIN_KEY not in detail.columns:
-        raise KeyError(f"JOIN_KEY '{JOIN_KEY}' not found in detail file: {DETAIL_FILENAME}")
+    # Resolve effective join key (LEFT_KEY/RIGHT_KEY override JOIN_KEY for mismatched names)
+    left_key  = LEFT_KEY  if LEFT_KEY  else JOIN_KEY
+    right_key = RIGHT_KEY if RIGHT_KEY else JOIN_KEY
 
-    # Prefix all detail columns except the join key
+    if left_key not in master.columns:
+        raise KeyError(f"Join key '{left_key}' not found in header file: {HEADER_FILENAME}")
+    if right_key not in detail.columns:
+        raise KeyError(f"Join key '{right_key}' not found in detail file: {DETAIL_FILENAME}")
+
+    if DEDUP_RIGHT_BY and DEDUP_RIGHT_BY in detail.columns:
+        detail = detail.drop_duplicates(subset=DEDUP_RIGHT_BY, keep=DEDUP_KEEP or "first")
+
+    # Prefix all detail columns except the (right) join key
     detail = detail.rename(columns={
         col: f"{DETAIL_PREFIX}{col}"
         for col in detail.columns
-        if col != JOIN_KEY
+        if col != right_key
     })
+    prefixed_right_key = right_key  # unchanged after rename (join key not prefixed)
 
-    result = master.merge(detail, on=JOIN_KEY, how=JOIN_TYPE)
+    if left_key == prefixed_right_key:
+        result = master.merge(
+            detail,
+            on=left_key,
+            how=JOIN_TYPE,
+            suffixes=(LEFT_SUFFIX, RIGHT_SUFFIX),
+        )
+    else:
+        result = master.merge(
+            detail,
+            left_on=left_key,
+            right_on=prefixed_right_key,
+            how=JOIN_TYPE,
+            suffixes=(LEFT_SUFFIX, RIGHT_SUFFIX),
+        )
+        if prefixed_right_key in result.columns and prefixed_right_key != left_key:
+            result = result.drop(columns=[prefixed_right_key])
+
+    result = _drop_columns(result, OUTPUT_DROP_COLUMNS)
+    result = _insert_column_after(result, INSERT_COLUMN, INSERT_AFTER_COLUMN)
 
     _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_paths[0]))
     out_path = os.path.join(_out_dir, OUTPUT_FILENAME)

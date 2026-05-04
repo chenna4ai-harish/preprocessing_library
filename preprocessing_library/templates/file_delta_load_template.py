@@ -28,15 +28,22 @@ from pathlib import Path as _Path
 import pandas as pd
 
 # ── Configuration (substituted at generation time) ────────────────────────────
-KEY_COLUMNS         = {{KEY_COLUMNS}}
-DELTA_MODE          = "{{DELTA_MODE}}"
-COMPARE_COLUMNS     = {{COMPARE_COLUMNS}}
-DELTA_STATUS_COLUMN = "{{DELTA_STATUS_COLUMN}}"
-NEW_FILENAME        = "{{NEW_FILENAME}}"    # file name for the new (current) file
-OLD_FILENAME        = "{{OLD_FILENAME}}"    # file name for the old (baseline/reference) file
-OUTPUT_DIR          = "{{OUTPUT_DIR}}"
-OUTPUT_FILENAME     = "{{OUTPUT_FILENAME}}"
-OUTPUT_FORMAT       = "{{OUTPUT_FORMAT}}"
+NEW_FILENAME         = "{{NEW_FILENAME}}"         # file name for the new (current) file
+OLD_FILENAME         = "{{OLD_FILENAME}}"         # file name for the old (baseline/reference) file
+LEFT_USECOLS         = {{LEFT_USECOLS}}            # columns to load from NEW file; [] = all
+RIGHT_USECOLS        = {{RIGHT_USECOLS}}           # columns to load from OLD file; [] = all
+LEFT_INNER_FILE      = "{{LEFT_INNER_FILE}}"       # when NEW file is a ZIP, extract this inner file; "" = first file
+RIGHT_INNER_FILE     = "{{RIGHT_INNER_FILE}}"      # when OLD file is a ZIP, extract this inner file; "" = first file
+KEY_COLUMNS          = {{KEY_COLUMNS}}
+DELTA_MODE           = "{{DELTA_MODE}}"
+COMPARE_COLUMNS      = {{COMPARE_COLUMNS}}
+DELTA_STATUS_COLUMN  = "{{DELTA_STATUS_COLUMN}}"
+OUTPUT_DROP_COLUMNS  = {{OUTPUT_DROP_COLUMNS}}     # columns to drop from delta result; [] = keep all
+INSERT_COLUMN        = "{{INSERT_COLUMN}}"         # move this column after INSERT_AFTER_COLUMN; "" = skip
+INSERT_AFTER_COLUMN  = "{{INSERT_AFTER_COLUMN}}"
+OUTPUT_DIR           = "{{OUTPUT_DIR}}"
+OUTPUT_FILENAME      = "{{OUTPUT_FILENAME}}"
+OUTPUT_FORMAT        = "{{OUTPUT_FORMAT}}"
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -44,10 +51,10 @@ OUTPUT_FORMAT       = "{{OUTPUT_FORMAT}}"
 _ENCODINGS = ["utf-8", "cp1252", "latin-1"]
 
 
-def _load_file(file_path: str) -> pd.DataFrame:
+def _load_file(file_path: str, inner_name: str = "") -> pd.DataFrame:
     ext = _Path(file_path).suffix.lower()
     if ext == ".zip":
-        return _load_zip(file_path)
+        return _load_zip(file_path, inner_name)
     if ext == ".xlsx":
         return pd.read_excel(file_path, engine="openpyxl")
     if ext == ".xls":
@@ -100,10 +107,18 @@ def _load_xml(file_path: str) -> pd.DataFrame:
     return pd.DataFrame(records)
 
 
-def _load_zip(file_path: str) -> pd.DataFrame:
+def _load_zip(file_path: str, inner_name: str = "") -> pd.DataFrame:
     _supported = {".csv", ".tsv", ".txt", ".xlsx", ".xls", ".json", ".xml"}
     with _zipfile.ZipFile(file_path, "r") as z:
-        for name in z.namelist():
+        names = z.namelist()
+        if inner_name:
+            for name in names:
+                if os.path.basename(name).lower() == inner_name.lower():
+                    with _tempfile.TemporaryDirectory() as tmp_dir:
+                        z.extract(name, tmp_dir)
+                        return _load_file(os.path.join(tmp_dir, name))
+            raise ValueError(f"'{inner_name}' not found inside ZIP: {file_path}")
+        for name in names:
             if _Path(name).suffix.lower() in _supported:
                 with _tempfile.TemporaryDirectory() as tmp_dir:
                     z.extract(name, tmp_dir)
@@ -140,6 +155,30 @@ def _find_input_file(input_paths: list, filename: str, fallback_idx: int = 0) ->
     return input_paths[fallback_idx]
 
 
+def _apply_usecols(df: pd.DataFrame, usecols: list) -> pd.DataFrame:
+    if usecols:
+        keep = [c for c in usecols if c in df.columns]
+        return df[keep]
+    return df
+
+
+def _drop_columns(df: pd.DataFrame, cols: list) -> pd.DataFrame:
+    if cols:
+        to_drop = [c for c in cols if c in df.columns]
+        return df.drop(columns=to_drop)
+    return df
+
+
+def _insert_column_after(df: pd.DataFrame, col: str, after: str) -> pd.DataFrame:
+    if not col or col not in df.columns or not after or after not in df.columns:
+        return df
+    cols = list(df.columns)
+    cols.remove(col)
+    idx = cols.index(after)
+    cols.insert(idx + 1, col)
+    return df[cols]
+
+
 def preprocess(input_paths: list) -> str:
     """
     Compare NEW_FILENAME (current) against OLD_FILENAME (baseline) and
@@ -172,8 +211,8 @@ def preprocess(input_paths: list) -> str:
 
     new_path      = _find_input_file(input_paths, NEW_FILENAME, 0)
     old_path      = _find_input_file(input_paths, OLD_FILENAME, 1)
-    current  = _load_file(new_path)
-    baseline = _load_file(old_path)
+    current  = _apply_usecols(_load_file(new_path, LEFT_INNER_FILE),  LEFT_USECOLS)
+    baseline = _apply_usecols(_load_file(old_path, RIGHT_INNER_FILE), RIGHT_USECOLS)
 
     # Determine columns to compare for changes
     compare_cols: list[str] = (
@@ -255,6 +294,9 @@ def preprocess(input_paths: list) -> str:
         )
 
     result = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+    result = _drop_columns(result, OUTPUT_DROP_COLUMNS)
+    result = _insert_column_after(result, INSERT_COLUMN, INSERT_AFTER_COLUMN)
 
     _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_paths[0]))
     out_path = os.path.join(_out_dir, OUTPUT_FILENAME)

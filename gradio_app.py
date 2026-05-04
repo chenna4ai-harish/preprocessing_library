@@ -29,6 +29,11 @@ from pathlib import Path
 import gradio as gr
 import pandas as pd
 
+# PrepKit add-on modules
+from app_profile import profile_file
+import app_history as _hist
+import app_pipeline as _pipe
+
 # ---------------------------------------------------------------------------
 # Path bootstrap
 # ---------------------------------------------------------------------------
@@ -38,6 +43,121 @@ sys.path.insert(0, str(_HERE))
 from preprocessing_library.generator import generate_preprocessor  # noqa: E402
 
 _TEMPLATES_DIR = str(_HERE / "preprocessing_library" / "templates")
+
+# ---------------------------------------------------------------------------
+# Friendly error message translator  (Phase A2)
+# ---------------------------------------------------------------------------
+_ERROR_HINTS: list[tuple[str, str]] = [
+    ("KeyError",          "Column not found — check the name matches a column shown in Tab 1."),
+    ("FileNotFoundError", "File not found — verify the folder path and filename are correct."),
+    ("PermissionError",   "Cannot read/write the file — it may be open in Excel or another app."),
+    ("JSONDecodeError",   "Invalid JSON in parameters — check brackets, quotes and commas."),
+    ("UnicodeDecodeError","Encoding error — try changing the ENCODING_PRIMARY parameter."),
+    ("EmptyDataError",    "The file appears to be empty or unreadable."),
+    ("MergeError",        "Join key not found in one of the files — check JOIN_KEY spelling."),
+    ("ParserError",       "Could not parse the file — check the delimiter or file format."),
+    ("ValueError",        "A value has the wrong type or format — check your parameter values."),
+]
+
+def _friendly_error(exc: Exception) -> str:
+    """Return a plain-English error message for common exceptions."""
+    exc_type = type(exc).__name__
+    exc_str  = str(exc)
+    for name, hint in _ERROR_HINTS:
+        if name in exc_type or name in exc_str:
+            return f"{hint}\n\nDetail: {exc_str[:300]}"
+    return exc_str[:500]
+
+# ---------------------------------------------------------------------------
+# Large file threshold — files bigger than this are not fully column-scanned
+# ---------------------------------------------------------------------------
+_LARGE_FILE_MB = 50
+_LARGE_FILE_BYTES = _LARGE_FILE_MB * 1_048_576
+
+# ---------------------------------------------------------------------------
+# Template category mapping  (Phase B1)
+# ---------------------------------------------------------------------------
+_TEMPLATE_CATEGORIES: dict[str, list[str]] = {
+    "All":            [],  # filled after TEMPLATE_CATALOG is defined
+    "Combine Files":  ["file_union","file_join_two","file_join_multi",
+                       "file_join_multi_key","file_denormalize",
+                       "file_zip_extract_join"],
+    "Clean Data":     ["file_deduplicate","file_rename_columns",
+                       "file_handle_nulls","file_cast_types"],
+    "Split / Filter": ["file_split_by_value","file_filter_to_files",
+                       "file_split_columns","file_filter_by_values"],
+    "Summarise":      ["file_aggregate","file_rank_filter","file_join_filter_agg"],
+    "Track Changes":  ["file_delta_load"],
+    "ZIP Input":      ["file_zip_extract_join","file_join_two_zip","file_join_multi_key_zip",
+                       "file_denormalize_zip","file_delta_load_zip","file_join_filter_agg_zip"],
+}
+
+# Maps ZIP-variant catalog names → the real template file to use for generation
+_ZIP_TEMPLATE_ALIASES: dict[str, str] = {
+    "file_join_two_zip":        "file_join_two",
+    "file_join_multi_key_zip":  "file_join_multi_key",
+    "file_denormalize_zip":     "file_denormalize",
+    "file_delta_load_zip":      "file_delta_load",
+    "file_join_filter_agg_zip": "file_join_filter_agg",
+}
+
+# ---------------------------------------------------------------------------
+# list-of-dicts param schemas for interactive table editors  (Phase C1)
+# Keys map to the parameter name inside params_json.
+# ---------------------------------------------------------------------------
+_LOD_SCHEMAS: dict[str, dict] = {
+    "JOIN_STEPS": {
+        "label":       "Join Steps",
+        "headers":     ["key", "how", "left_suffix", "right_suffix"],
+        "default_row": ["id", "inner", "_l", "_r"],
+    },
+    "FILTER_RULES": {
+        "label":       "Filter Rules",
+        "headers":     ["condition", "output_filename"],
+        "default_row": ["status == 'ACTIVE'", "active.csv"],
+    },
+    "NULL_RULES": {
+        "label":       "Null Handling Rules",
+        "headers":     ["column", "strategy", "fill_value"],
+        "default_row": ["*", "fill", ""],
+    },
+    "TYPE_RULES": {
+        "label":       "Type Cast Rules",
+        "headers":     ["column", "target_type", "format"],
+        "default_row": ["amount", "float", ""],
+    },
+    "VALUE_GROUPS": {
+        "label":       "Value Groups  (comma-separate multiple values)",
+        "headers":     ["values", "output_filename"],
+        "default_row": ["ACTIVE,APPROVED", "active.csv"],
+    },
+    "COLUMN_GROUPS": {
+        "label":       "Column Groups  (comma-separate column names)",
+        "headers":     ["columns", "output_filename"],
+        "default_row": ["name,email", "contacts.csv"],
+    },
+    "AGGREGATIONS": {
+        "label":       "Aggregations",
+        "headers":     ["column", "function", "output_column"],
+        "default_row": ["amount", "sum", "total_amount"],
+    },
+}
+
+# Which list-of-dicts param each template uses (first one wins for the editor)
+_TEMPLATE_LOD_PARAM: dict[str, str] = {
+    "file_join_multi":          "JOIN_STEPS",
+    "file_filter_to_files":     "FILTER_RULES",
+    "file_handle_nulls":        "NULL_RULES",
+    "file_cast_types":          "TYPE_RULES",
+    "file_filter_by_values":    "VALUE_GROUPS",
+    "file_split_columns":       "COLUMN_GROUPS",
+    "file_aggregate":           "AGGREGATIONS",
+    "file_join_filter_agg":     "AGGREGATIONS",
+    "file_join_filter_agg_zip": "AGGREGATIONS",
+}
+
+# WHERE condition operator choices  (Phase B3)
+_WHERE_OPS = ["==", "!=", ">", ">=", "<", "<=", "contains", "startswith", "in"]
 
 # ---------------------------------------------------------------------------
 # Template Catalog  — parameter names MUST match {{PLACEHOLDER}} in templates
@@ -75,17 +195,28 @@ TEMPLATE_CATALOG: dict[str, dict] = {
 
     "file_join_two": {
         "display_name": "PS-03 — Join Two Files",
-        "description":  "Join two files on a single key column.",
+        "description":  "Join two files on a key column. Both files use the same key name by default; set LEFT_KEY / RIGHT_KEY to join on differently-named columns.",
         "function_sig": "preprocess(input_paths: list) -> str",
         "input_type":   "two",
         "parameters": [
-            {"name": "JOIN_KEY",        "type": "str", "default": "id",         "help": "Column to join on. ← pick from columns"},
-            {"name": "JOIN_TYPE",       "type": "str", "default": "inner",      "help": "inner | left | right | outer"},
-            {"name": "LEFT_SUFFIX",     "type": "str", "default": "_left",      "help": "Suffix for overlapping columns from the left file."},
-            {"name": "RIGHT_SUFFIX",    "type": "str", "default": "_right",     "help": "Suffix for overlapping columns from the right file."},
-            {"name": "OUTPUT_DIR",      "type": "str", "default": "",   "help": "Directory to write the output file."},
-            {"name": "OUTPUT_FILENAME", "type": "str", "default": "joined.csv", "help": "Name of the output file."},
-            {"name": "OUTPUT_FORMAT",   "type": "str", "default": "csv",        "help": "csv | xlsx | json | parquet | tsv"},
+            {"name": "LEFT_USECOLS",      "type": "list", "default": "[]",       "help": "Columns to load from the left file. [] = all columns."},
+            {"name": "RIGHT_USECOLS",     "type": "list", "default": "[]",       "help": "Columns to load from the right file. [] = all columns."},
+            {"name": "LEFT_INNER_FILE",   "type": "str",  "default": "",         "help": "When the left input is a ZIP, extract this named file (e.g. customers.csv). \"\" = use the first supported file."},
+            {"name": "RIGHT_INNER_FILE",  "type": "str",  "default": "",         "help": "When the right input is a ZIP, extract this named file (e.g. invoices.csv). \"\" = use the first supported file."},
+            {"name": "DEDUP_RIGHT_BY",    "type": "str",  "default": "",         "help": "Deduplicate right file on this column before joining. \"\" = skip."},
+            {"name": "DEDUP_KEEP",        "type": "str",  "default": "first",    "help": "first | last — which duplicate row to keep."},
+            {"name": "JOIN_KEY",          "type": "str",  "default": "id",       "help": "Key column name (used for both files when LEFT_KEY / RIGHT_KEY are empty)."},
+            {"name": "LEFT_KEY",          "type": "str",  "default": "",         "help": "Key column in the LEFT file. Leave blank to use JOIN_KEY."},
+            {"name": "RIGHT_KEY",         "type": "str",  "default": "",         "help": "Key column in the RIGHT file. Leave blank to use JOIN_KEY."},
+            {"name": "JOIN_TYPE",         "type": "str",  "default": "inner",    "help": "inner | left | right | outer"},
+            {"name": "LEFT_SUFFIX",       "type": "str",  "default": "_left",    "help": "Suffix for overlapping columns from the left file."},
+            {"name": "RIGHT_SUFFIX",      "type": "str",  "default": "_right",   "help": "Suffix for overlapping columns from the right file."},
+            {"name": "OUTPUT_DROP_COLUMNS","type": "list", "default": "[]",      "help": "Columns to drop from merged result. [] = keep all."},
+            {"name": "INSERT_COLUMN",     "type": "str",  "default": "",         "help": "Reposition this column immediately after INSERT_AFTER_COLUMN. \"\" = skip."},
+            {"name": "INSERT_AFTER_COLUMN","type": "str", "default": "",         "help": "Anchor column for INSERT_COLUMN repositioning."},
+            {"name": "OUTPUT_DIR",        "type": "str",  "default": "",         "help": "Directory to write the output file."},
+            {"name": "OUTPUT_FILENAME",   "type": "str",  "default": "joined.csv","help": "Name of the output file."},
+            {"name": "OUTPUT_FORMAT",     "type": "str",  "default": "csv",      "help": "csv | xlsx | json | parquet | tsv"},
         ],
     },
 
@@ -110,13 +241,27 @@ TEMPLATE_CATALOG: dict[str, dict] = {
         "function_sig": "preprocess(input_paths: list) -> str",
         "input_type":   "two",
         "parameters": [
-            {"name": "JOIN_KEYS",       "type": "list", "default": '["id", "date"]',    "help": "List of columns to join on. ← pick from columns"},
-            {"name": "JOIN_TYPE",       "type": "str",  "default": "inner",              "help": "inner | left | right | outer"},
-            {"name": "LEFT_SUFFIX",     "type": "str",  "default": "_left",              "help": "Suffix for overlapping columns from the left file."},
-            {"name": "RIGHT_SUFFIX",    "type": "str",  "default": "_right",             "help": "Suffix for overlapping columns from the right file."},
-            {"name": "OUTPUT_DIR",      "type": "str",  "default": "",           "help": "Directory to write the output file."},
-            {"name": "OUTPUT_FILENAME", "type": "str",  "default": "multikey_join.csv",  "help": "Name of the output file."},
-            {"name": "OUTPUT_FORMAT",   "type": "str",  "default": "csv",                "help": "csv | xlsx | json | parquet | tsv"},
+            {"name": "LEFT_USECOLS",       "type": "list", "default": "[]",      "help": "Columns to load from the left file. [] = all columns."},
+            {"name": "RIGHT_USECOLS",      "type": "list", "default": "[]",      "help": "Columns to load from the right file. [] = all columns."},
+            {"name": "LEFT_INNER_FILE",    "type": "str",  "default": "",        "help": "When the left input is a ZIP, extract this named file (e.g. customers.csv). \"\" = use the first supported file."},
+            {"name": "RIGHT_INNER_FILE",   "type": "str",  "default": "",        "help": "When the right input is a ZIP, extract this named file (e.g. invoices.csv). \"\" = use the first supported file."},
+            {"name": "DEDUP_RIGHT_BY",     "type": "str",  "default": "",        "help": "Deduplicate right file on this column before joining. \"\" = skip."},
+            {"name": "DEDUP_KEEP",         "type": "str",  "default": "first",   "help": "first | last — which duplicate row to keep."},
+            {"name": "JOIN_KEYS",          "type": "list", "default": '["id", "date"]',
+             "help": "Key column names shared by both files. Leave LEFT_KEYS/RIGHT_KEYS empty to use this for both sides."},
+            {"name": "LEFT_KEYS",          "type": "list", "default": "[]",
+             "help": "Key columns in the LEFT file. Leave empty to use JOIN_KEYS."},
+            {"name": "RIGHT_KEYS",         "type": "list", "default": "[]",
+             "help": "Key columns in the RIGHT file. Leave empty to use JOIN_KEYS. Must be same length as LEFT_KEYS."},
+            {"name": "JOIN_TYPE",          "type": "str",  "default": "inner",          "help": "inner | left | right | outer"},
+            {"name": "LEFT_SUFFIX",        "type": "str",  "default": "_left",          "help": "Suffix for overlapping columns from the left file."},
+            {"name": "RIGHT_SUFFIX",       "type": "str",  "default": "_right",         "help": "Suffix for overlapping columns from the right file."},
+            {"name": "OUTPUT_DROP_COLUMNS","type": "list", "default": "[]",             "help": "Columns to drop from merged result. [] = keep all."},
+            {"name": "INSERT_COLUMN",      "type": "str",  "default": "",               "help": "Reposition this column immediately after INSERT_AFTER_COLUMN. \"\" = skip."},
+            {"name": "INSERT_AFTER_COLUMN","type": "str",  "default": "",               "help": "Anchor column for INSERT_COLUMN repositioning."},
+            {"name": "OUTPUT_DIR",         "type": "str",  "default": "",               "help": "Directory to write the output file."},
+            {"name": "OUTPUT_FILENAME",    "type": "str",  "default": "multikey_join.csv","help": "Name of the output file."},
+            {"name": "OUTPUT_FORMAT",      "type": "str",  "default": "csv",            "help": "csv | xlsx | json | parquet | tsv"},
         ],
     },
 
@@ -126,12 +271,25 @@ TEMPLATE_CATALOG: dict[str, dict] = {
         "function_sig": "preprocess(input_paths: list) -> str",
         "input_type":   "two",
         "parameters": [
-            {"name": "JOIN_KEY",        "type": "str", "default": "id",               "help": "Column shared by header and detail. ← pick from columns"},
-            {"name": "JOIN_TYPE",       "type": "str", "default": "left",             "help": "inner | left | right | outer"},
-            {"name": "DETAIL_PREFIX",   "type": "str", "default": "detail_",          "help": "Prefix added to every detail column (except the join key)."},
-            {"name": "OUTPUT_DIR",      "type": "str", "default": "",         "help": "Directory to write the output file."},
-            {"name": "OUTPUT_FILENAME", "type": "str", "default": "denormalized.csv", "help": "Name of the output file."},
-            {"name": "OUTPUT_FORMAT",   "type": "str", "default": "csv",              "help": "csv | xlsx | json | parquet | tsv"},
+            {"name": "LEFT_USECOLS",       "type": "list", "default": "[]",        "help": "Columns to load from the header file. [] = all columns."},
+            {"name": "RIGHT_USECOLS",      "type": "list", "default": "[]",        "help": "Columns to load from the detail file. [] = all columns."},
+            {"name": "LEFT_INNER_FILE",    "type": "str",  "default": "",          "help": "When the header input is a ZIP, extract this named file. \"\" = use the first supported file."},
+            {"name": "RIGHT_INNER_FILE",   "type": "str",  "default": "",          "help": "When the detail input is a ZIP, extract this named file. \"\" = use the first supported file."},
+            {"name": "DEDUP_RIGHT_BY",     "type": "str",  "default": "",          "help": "Deduplicate detail file on this column before joining. \"\" = skip."},
+            {"name": "DEDUP_KEEP",         "type": "str",  "default": "first",     "help": "first | last — which duplicate row to keep."},
+            {"name": "JOIN_KEY",           "type": "str",  "default": "id",        "help": "Shared join column name. Used when LEFT_KEY / RIGHT_KEY are empty. ← pick from columns"},
+            {"name": "LEFT_KEY",           "type": "str",  "default": "",          "help": "Join key in the header file when it differs from JOIN_KEY. \"\" = use JOIN_KEY."},
+            {"name": "RIGHT_KEY",          "type": "str",  "default": "",          "help": "Join key in the detail file when it differs from JOIN_KEY. \"\" = use JOIN_KEY."},
+            {"name": "JOIN_TYPE",          "type": "str",  "default": "left",      "help": "inner | left | right | outer"},
+            {"name": "LEFT_SUFFIX",        "type": "str",  "default": "_left",     "help": "Suffix for overlapping columns from the header file."},
+            {"name": "RIGHT_SUFFIX",       "type": "str",  "default": "_right",    "help": "Suffix for overlapping columns from the detail file."},
+            {"name": "DETAIL_PREFIX",      "type": "str",  "default": "detail_",   "help": "Prefix added to every detail column (except the join key)."},
+            {"name": "OUTPUT_DROP_COLUMNS","type": "list", "default": "[]",        "help": "Columns to drop from merged result. [] = keep all."},
+            {"name": "INSERT_COLUMN",      "type": "str",  "default": "",          "help": "Reposition this column immediately after INSERT_AFTER_COLUMN. \"\" = skip."},
+            {"name": "INSERT_AFTER_COLUMN","type": "str",  "default": "",          "help": "Anchor column for INSERT_COLUMN repositioning."},
+            {"name": "OUTPUT_DIR",         "type": "str",  "default": "",          "help": "Directory to write the output file."},
+            {"name": "OUTPUT_FILENAME",    "type": "str",  "default": "denormalized.csv","help": "Name of the output file."},
+            {"name": "OUTPUT_FORMAT",      "type": "str",  "default": "csv",       "help": "csv | xlsx | json | parquet | tsv"},
         ],
     },
 
@@ -267,21 +425,24 @@ TEMPLATE_CATALOG: dict[str, dict] = {
 
     "file_delta_load": {
         "display_name": "PS-15 — Delta Load (Change Detection)",
-        "description":  "Compare new vs old file; tag rows NEW / DELETED / CHANGED / UNCHANGED.",
+        "description":  "Compare new vs old file; tag rows NEW / CHANGED / DELETED.",
         "function_sig": "preprocess(input_paths: list) -> str",
         "input_type":   "two",
         "parameters": [
-            {"name": "KEY_COLUMNS",        "type": "list", "default": '["id"]',
-             "help": "Columns that uniquely identify a record. ← pick from columns"},
-            {"name": "COMPARE_COLUMNS",    "type": "list", "default": '[]',
-             "help": "Columns to check for changes. [] = compare all non-key columns."},
-            {"name": "DELTA_MODE",         "type": "str",  "default": "all",
-             "help": "all | new_only | deleted_only | changed_only | unchanged_only"},
-            {"name": "DELTA_STATUS_COLUMN","type": "str",  "default": "_delta",
-             "help": "Name of the status tag column added to output."},
-            {"name": "OUTPUT_DIR",         "type": "str",  "default": "",   "help": "Directory to write the output file."},
-            {"name": "OUTPUT_FILENAME",    "type": "str",  "default": "delta.csv",  "help": "Name of the output file."},
-            {"name": "OUTPUT_FORMAT",      "type": "str",  "default": "csv",        "help": "csv | xlsx | json | parquet | tsv"},
+            {"name": "LEFT_USECOLS",       "type": "list", "default": "[]",       "help": "Columns to load from the new (current) file. [] = all columns."},
+            {"name": "RIGHT_USECOLS",      "type": "list", "default": "[]",       "help": "Columns to load from the old (baseline) file. [] = all columns."},
+            {"name": "LEFT_INNER_FILE",    "type": "str",  "default": "",         "help": "When the new file input is a ZIP, extract this named file. \"\" = use the first supported file."},
+            {"name": "RIGHT_INNER_FILE",   "type": "str",  "default": "",         "help": "When the old file input is a ZIP, extract this named file. \"\" = use the first supported file."},
+            {"name": "KEY_COLUMNS",        "type": "list", "default": '["id"]',   "help": "Columns that uniquely identify a record. ← pick from columns"},
+            {"name": "COMPARE_COLUMNS",    "type": "list", "default": "[]",       "help": "Columns to check for changes. [] = compare all non-key columns."},
+            {"name": "DELTA_MODE",         "type": "str",  "default": "full_delta","help": "new_only | changed_only | full_delta (NEW + CHANGED + DELETED)"},
+            {"name": "DELTA_STATUS_COLUMN","type": "str",  "default": "Delta_Status","help": "Name of the status tag column added to output. Values: NEW | CHANGED | DELETED."},
+            {"name": "OUTPUT_DROP_COLUMNS","type": "list", "default": "[]",       "help": "Columns to drop from delta result. [] = keep all."},
+            {"name": "INSERT_COLUMN",      "type": "str",  "default": "",         "help": "Reposition this column immediately after INSERT_AFTER_COLUMN. \"\" = skip."},
+            {"name": "INSERT_AFTER_COLUMN","type": "str",  "default": "",         "help": "Anchor column for INSERT_COLUMN repositioning."},
+            {"name": "OUTPUT_DIR",         "type": "str",  "default": "",         "help": "Directory to write the output file."},
+            {"name": "OUTPUT_FILENAME",    "type": "str",  "default": "delta.csv","help": "Name of the output file."},
+            {"name": "OUTPUT_FORMAT",      "type": "str",  "default": "csv",      "help": "csv | xlsx | json | parquet | tsv"},
         ],
     },
 
@@ -330,36 +491,209 @@ TEMPLATE_CATALOG: dict[str, dict] = {
         "function_sig": "preprocess(input_paths: list) -> str",
         "input_type":   "two",
         "parameters": [
-            {"name": "JOIN_KEYS",        "type": "list", "default": '["id"]',
-             "help": "Column(s) to join on. ← pick from columns"},
-            {"name": "JOIN_TYPE",        "type": "str",  "default": "inner",
-             "help": "inner | left | right | outer"},
-            {"name": "WHERE_CONDITION",  "type": "str",  "default": "",
+            {"name": "LEFT_USECOLS",       "type": "list", "default": "[]",      "help": "Columns to load from the left file. [] = all columns."},
+            {"name": "RIGHT_USECOLS",      "type": "list", "default": "[]",      "help": "Columns to load from the right file. [] = all columns."},
+            {"name": "LEFT_INNER_FILE",    "type": "str",  "default": "",        "help": "When the left input is a ZIP, extract this named file (e.g. customers.csv). \"\" = use the first supported file."},
+            {"name": "RIGHT_INNER_FILE",   "type": "str",  "default": "",        "help": "When the right input is a ZIP, extract this named file (e.g. invoices.csv). \"\" = use the first supported file."},
+            {"name": "DEDUP_RIGHT_BY",     "type": "str",  "default": "",        "help": "Deduplicate right file on this column before joining. \"\" = skip."},
+            {"name": "DEDUP_KEEP",         "type": "str",  "default": "first",   "help": "first | last — which duplicate row to keep."},
+            {"name": "JOIN_KEYS",          "type": "list", "default": '["id"]',  "help": "Column(s) to join on. ← pick from columns"},
+            {"name": "JOIN_TYPE",          "type": "str",  "default": "inner",   "help": "inner | left | right | outer"},
+            {"name": "LEFT_SUFFIX",        "type": "str",  "default": "_left",   "help": "Suffix for overlapping columns from the left file."},
+            {"name": "RIGHT_SUFFIX",       "type": "str",  "default": "_right",  "help": "Suffix for overlapping columns from the right file."},
+            {"name": "WHERE_CONDITION",    "type": "str",  "default": "",
              "help": "pandas query() on joined result. Leave empty for no filter. e.g.  amount > 0 and status == 'ACTIVE'"},
-            {"name": "GROUP_BY_COLUMNS", "type": "list", "default": '["category"]',
+            {"name": "GROUP_BY_COLUMNS",   "type": "list", "default": '["category"]',
              "help": "Columns to group by after filtering. ← pick from columns"},
-            {"name": "AGGREGATIONS",     "type": "list_of_dicts",
+            {"name": "AGGREGATIONS",       "type": "list_of_dicts",
              "default": '[{"column": "*", "function": "count", "output_column": "_row_count"}]',
-             "help": 'Each: {"column":"col or *","function":"count|sum|mean|min|max|nunique|first|last|std","output_column":"name"}. Use "*" or "count" for row count.'},
-            {"name": "RANK_BY_COLUMN",   "type": "str",  "default": "",
+             "help": 'Each: {"column":"col or *","function":"count|sum|mean|min|max|nunique|first|last|std","output_column":"name"}. Use "*" for row count.'},
+            {"name": "RANK_BY_COLUMN",     "type": "str",  "default": "",
              "help": "Column in aggregated result to rank by. Leave empty to skip ranking. ← pick"},
-            {"name": "RANK_ORDER",       "type": "str",  "default": "desc",
-             "help": "asc (rank 1 = smallest) | desc (rank 1 = largest)"},
-            {"name": "RANK_COLUMN_NAME", "type": "str",  "default": "_rank",
-             "help": "Name of the rank column added to output."},
-            {"name": "KEEP_TOP_N",       "type": "int",  "default": "0",
-             "help": "Keep rows with rank <= N. 0 = keep all rows."},
-            {"name": "OUTPUT_DIR",       "type": "str",  "default": "",
-             "help": "Directory to write the output file."},
-            {"name": "OUTPUT_FILENAME",  "type": "str",  "default": "join_filter_agg.csv",
-             "help": "Name of the output file."},
-            {"name": "OUTPUT_FORMAT",    "type": "str",  "default": "csv",
-             "help": "csv | xlsx | json | parquet | tsv"},
+            {"name": "RANK_ORDER",         "type": "str",  "default": "desc",   "help": "asc (rank 1 = smallest) | desc (rank 1 = largest)"},
+            {"name": "RANK_COLUMN_NAME",   "type": "str",  "default": "_rank",  "help": "Name of the rank column added to output."},
+            {"name": "KEEP_TOP_N",         "type": "int",  "default": "0",      "help": "Keep rows with rank <= N. 0 = keep all rows."},
+            {"name": "OUTPUT_DROP_COLUMNS","type": "list", "default": "[]",     "help": "Columns to drop from result before writing. [] = keep all."},
+            {"name": "INSERT_COLUMN",      "type": "str",  "default": "",       "help": "Reposition this column immediately after INSERT_AFTER_COLUMN. \"\" = skip."},
+            {"name": "INSERT_AFTER_COLUMN","type": "str",  "default": "",       "help": "Anchor column for INSERT_COLUMN repositioning."},
+            {"name": "OUTPUT_DIR",         "type": "str",  "default": "",       "help": "Directory to write the output file."},
+            {"name": "OUTPUT_FILENAME",    "type": "str",  "default": "join_filter_agg.csv","help": "Name of the output file."},
+            {"name": "OUTPUT_FORMAT",      "type": "str",  "default": "csv",    "help": "csv | xlsx | json | parquet | tsv"},
+        ],
+    },
+    # ── ZIP Input Variants ──────────────────────────────────────────────────────
+    # These reuse the same template .py files (via _ZIP_TEMPLATE_ALIASES) but
+    # surface LEFT_INNER_FILE / RIGHT_INNER_FILE at the top of the params form.
+    "file_join_two_zip": {
+        "display_name": "Join Two ZIP Files",
+        "description":  "Extract one named file from each of two ZIPs, then join them on a key column.",
+        "function_sig": "preprocess(input_paths: list) -> str",
+        "input_type":   "two",
+        "parameters": [
+            {"name": "LEFT_INNER_FILE",    "type": "str",  "default": "",          "help": "File to extract from the Left ZIP (e.g. customers.csv). Required."},
+            {"name": "RIGHT_INNER_FILE",   "type": "str",  "default": "",          "help": "File to extract from the Right ZIP (e.g. invoices.csv). Required."},
+            {"name": "LEFT_USECOLS",       "type": "list", "default": "[]",        "help": "Columns to load from left file. [] = all."},
+            {"name": "RIGHT_USECOLS",      "type": "list", "default": "[]",        "help": "Columns to load from right file. [] = all."},
+            {"name": "DEDUP_RIGHT_BY",     "type": "str",  "default": "",          "help": "Dedup right on this column before join. \"\" = skip."},
+            {"name": "DEDUP_KEEP",         "type": "str",  "default": "first",     "help": "first | last"},
+            {"name": "JOIN_KEY",           "type": "str",  "default": "id",        "help": "Shared join column."},
+            {"name": "LEFT_KEY",           "type": "str",  "default": "",          "help": "Join column in left file. Leave blank to use JOIN_KEY."},
+            {"name": "RIGHT_KEY",          "type": "str",  "default": "",          "help": "Join column in right file. Leave blank to use JOIN_KEY."},
+            {"name": "JOIN_TYPE",          "type": "str",  "default": "inner",     "help": "inner | left | right | outer"},
+            {"name": "LEFT_SUFFIX",        "type": "str",  "default": "_left",     "help": "Suffix for overlapping left columns."},
+            {"name": "RIGHT_SUFFIX",       "type": "str",  "default": "_right",    "help": "Suffix for overlapping right columns."},
+            {"name": "OUTPUT_DROP_COLUMNS","type": "list", "default": "[]",        "help": "Columns to drop from result. [] = keep all."},
+            {"name": "INSERT_COLUMN",      "type": "str",  "default": "",          "help": "Reposition this column after INSERT_AFTER_COLUMN. \"\" = skip."},
+            {"name": "INSERT_AFTER_COLUMN","type": "str",  "default": "",          "help": "Anchor column for reordering."},
+            {"name": "OUTPUT_DIR",         "type": "str",  "default": "",          "help": "Directory to write the output file."},
+            {"name": "OUTPUT_FILENAME",    "type": "str",  "default": "joined.csv","help": "Name of the output file."},
+            {"name": "OUTPUT_FORMAT",      "type": "str",  "default": "csv",       "help": "csv | xlsx | json | parquet | tsv"},
+        ],
+    },
+
+    "file_join_multi_key_zip": {
+        "display_name": "Join Two ZIP Files (Multi-Key)",
+        "description":  "Extract one named file from each of two ZIPs, then join on multiple key columns.",
+        "function_sig": "preprocess(input_paths: list) -> str",
+        "input_type":   "two",
+        "parameters": [
+            {"name": "LEFT_INNER_FILE",    "type": "str",  "default": "",                 "help": "File to extract from the Left ZIP (e.g. customers.csv). Required."},
+            {"name": "RIGHT_INNER_FILE",   "type": "str",  "default": "",                 "help": "File to extract from the Right ZIP (e.g. invoices.csv). Required."},
+            {"name": "LEFT_USECOLS",       "type": "list", "default": "[]",               "help": "Columns to load from left file. [] = all."},
+            {"name": "RIGHT_USECOLS",      "type": "list", "default": "[]",               "help": "Columns to load from right file. [] = all."},
+            {"name": "DEDUP_RIGHT_BY",     "type": "str",  "default": "",                 "help": "Dedup right on this column before join. \"\" = skip."},
+            {"name": "DEDUP_KEEP",         "type": "str",  "default": "first",            "help": "first | last"},
+            {"name": "JOIN_KEYS",          "type": "list", "default": '["id", "date"]',   "help": "Shared key columns for both files."},
+            {"name": "LEFT_KEYS",          "type": "list", "default": "[]",               "help": "Key columns in left file. [] = use JOIN_KEYS."},
+            {"name": "RIGHT_KEYS",         "type": "list", "default": "[]",               "help": "Key columns in right file. [] = use JOIN_KEYS."},
+            {"name": "JOIN_TYPE",          "type": "str",  "default": "inner",            "help": "inner | left | right | outer"},
+            {"name": "LEFT_SUFFIX",        "type": "str",  "default": "_left",            "help": "Suffix for overlapping left columns."},
+            {"name": "RIGHT_SUFFIX",       "type": "str",  "default": "_right",           "help": "Suffix for overlapping right columns."},
+            {"name": "OUTPUT_DROP_COLUMNS","type": "list", "default": "[]",               "help": "Columns to drop from result. [] = keep all."},
+            {"name": "INSERT_COLUMN",      "type": "str",  "default": "",                 "help": "Reposition this column after INSERT_AFTER_COLUMN. \"\" = skip."},
+            {"name": "INSERT_AFTER_COLUMN","type": "str",  "default": "",                 "help": "Anchor column for reordering."},
+            {"name": "OUTPUT_DIR",         "type": "str",  "default": "",                 "help": "Directory to write the output file."},
+            {"name": "OUTPUT_FILENAME",    "type": "str",  "default": "multikey_join.csv","help": "Name of the output file."},
+            {"name": "OUTPUT_FORMAT",      "type": "str",  "default": "csv",              "help": "csv | xlsx | json | parquet | tsv"},
+        ],
+    },
+
+    "file_denormalize_zip": {
+        "display_name": "Denormalize ZIP Files (Header + Detail)",
+        "description":  "Extract a header file and detail file from two ZIPs, then flatten into a single wide file.",
+        "function_sig": "preprocess(input_paths: list) -> str",
+        "input_type":   "two",
+        "parameters": [
+            {"name": "LEFT_INNER_FILE",    "type": "str",  "default": "",               "help": "File to extract from the Header ZIP. Required."},
+            {"name": "RIGHT_INNER_FILE",   "type": "str",  "default": "",               "help": "File to extract from the Detail ZIP. Required."},
+            {"name": "LEFT_USECOLS",       "type": "list", "default": "[]",             "help": "Columns to load from header file. [] = all."},
+            {"name": "RIGHT_USECOLS",      "type": "list", "default": "[]",             "help": "Columns to load from detail file. [] = all."},
+            {"name": "DEDUP_RIGHT_BY",     "type": "str",  "default": "",               "help": "Dedup detail on this column before join. \"\" = skip."},
+            {"name": "DEDUP_KEEP",         "type": "str",  "default": "first",          "help": "first | last"},
+            {"name": "JOIN_KEY",           "type": "str",  "default": "id",             "help": "Shared join column."},
+            {"name": "LEFT_KEY",           "type": "str",  "default": "",               "help": "Join column in header file. Leave blank to use JOIN_KEY."},
+            {"name": "RIGHT_KEY",          "type": "str",  "default": "",               "help": "Join column in detail file. Leave blank to use JOIN_KEY."},
+            {"name": "JOIN_TYPE",          "type": "str",  "default": "left",           "help": "inner | left | right | outer"},
+            {"name": "LEFT_SUFFIX",        "type": "str",  "default": "_left",          "help": "Suffix for overlapping header columns."},
+            {"name": "RIGHT_SUFFIX",       "type": "str",  "default": "_right",         "help": "Suffix for overlapping detail columns."},
+            {"name": "DETAIL_PREFIX",      "type": "str",  "default": "detail_",        "help": "Prefix added to every detail column (except join key)."},
+            {"name": "OUTPUT_DROP_COLUMNS","type": "list", "default": "[]",             "help": "Columns to drop from result. [] = keep all."},
+            {"name": "INSERT_COLUMN",      "type": "str",  "default": "",               "help": "Reposition this column after INSERT_AFTER_COLUMN. \"\" = skip."},
+            {"name": "INSERT_AFTER_COLUMN","type": "str",  "default": "",               "help": "Anchor column for reordering."},
+            {"name": "OUTPUT_DIR",         "type": "str",  "default": "",               "help": "Directory to write the output file."},
+            {"name": "OUTPUT_FILENAME",    "type": "str",  "default": "denormalized.csv","help": "Name of the output file."},
+            {"name": "OUTPUT_FORMAT",      "type": "str",  "default": "csv",            "help": "csv | xlsx | json | parquet | tsv"},
+        ],
+    },
+
+    "file_delta_load_zip": {
+        "display_name": "Delta Load from ZIP Files",
+        "description":  "Extract current and baseline files from two ZIPs, then tag rows as NEW / CHANGED / DELETED.",
+        "function_sig": "preprocess(input_paths: list) -> str",
+        "input_type":   "two",
+        "parameters": [
+            {"name": "LEFT_INNER_FILE",    "type": "str",  "default": "",            "help": "File to extract from the New/Current ZIP. Required."},
+            {"name": "RIGHT_INNER_FILE",   "type": "str",  "default": "",            "help": "File to extract from the Old/Reference ZIP. Required."},
+            {"name": "LEFT_USECOLS",       "type": "list", "default": "[]",          "help": "Columns to load from new file. [] = all."},
+            {"name": "RIGHT_USECOLS",      "type": "list", "default": "[]",          "help": "Columns to load from old file. [] = all."},
+            {"name": "KEY_COLUMNS",        "type": "list", "default": '["id"]',      "help": "Columns that uniquely identify a record."},
+            {"name": "COMPARE_COLUMNS",    "type": "list", "default": "[]",          "help": "Columns to check for changes. [] = compare all non-key columns."},
+            {"name": "DELTA_MODE",         "type": "str",  "default": "full_delta",  "help": "new_only | changed_only | full_delta"},
+            {"name": "DELTA_STATUS_COLUMN","type": "str",  "default": "Delta_Status","help": "Name of the status tag column added to output."},
+            {"name": "OUTPUT_DROP_COLUMNS","type": "list", "default": "[]",          "help": "Columns to drop from result. [] = keep all."},
+            {"name": "INSERT_COLUMN",      "type": "str",  "default": "",            "help": "Reposition this column after INSERT_AFTER_COLUMN. \"\" = skip."},
+            {"name": "INSERT_AFTER_COLUMN","type": "str",  "default": "",            "help": "Anchor column for reordering."},
+            {"name": "OUTPUT_DIR",         "type": "str",  "default": "",            "help": "Directory to write the output file."},
+            {"name": "OUTPUT_FILENAME",    "type": "str",  "default": "delta.csv",   "help": "Name of the output file."},
+            {"name": "OUTPUT_FORMAT",      "type": "str",  "default": "csv",         "help": "csv | xlsx | json | parquet | tsv"},
+        ],
+    },
+
+    "file_join_filter_agg_zip": {
+        "display_name": "Join ZIP Files, Filter & Aggregate",
+        "description":  "Extract one file from each of two ZIPs, join them, apply WHERE filter, group-by aggregate, optional ranking.",
+        "function_sig": "preprocess(input_paths: list) -> str",
+        "input_type":   "two",
+        "parameters": [
+            {"name": "LEFT_INNER_FILE",    "type": "str",  "default": "",             "help": "File to extract from the Left ZIP. Required."},
+            {"name": "RIGHT_INNER_FILE",   "type": "str",  "default": "",             "help": "File to extract from the Right ZIP. Required."},
+            {"name": "LEFT_USECOLS",       "type": "list", "default": "[]",           "help": "Columns to load from left file. [] = all."},
+            {"name": "RIGHT_USECOLS",      "type": "list", "default": "[]",           "help": "Columns to load from right file. [] = all."},
+            {"name": "DEDUP_RIGHT_BY",     "type": "str",  "default": "",             "help": "Dedup right on this column before join. \"\" = skip."},
+            {"name": "DEDUP_KEEP",         "type": "str",  "default": "first",        "help": "first | last"},
+            {"name": "JOIN_KEYS",          "type": "list", "default": '["id"]',       "help": "Column(s) to join on."},
+            {"name": "JOIN_TYPE",          "type": "str",  "default": "inner",        "help": "inner | left | right | outer"},
+            {"name": "LEFT_SUFFIX",        "type": "str",  "default": "_left",        "help": "Suffix for overlapping left columns."},
+            {"name": "RIGHT_SUFFIX",       "type": "str",  "default": "_right",       "help": "Suffix for overlapping right columns."},
+            {"name": "WHERE_CONDITION",    "type": "str",  "default": "",             "help": "pandas query() on joined result. \"\" = no filter."},
+            {"name": "GROUP_BY_COLUMNS",   "type": "list", "default": '["category"]', "help": "Columns to group by."},
+            {"name": "AGGREGATIONS",       "type": "list_of_dicts",
+             "default": '[{"column": "*", "function": "count", "output_column": "_row_count"}]',
+             "help": 'Each: {"column":"col or *","function":"count|sum|mean|...","output_column":"name"}'},
+            {"name": "RANK_BY_COLUMN",     "type": "str",  "default": "",             "help": "Column to rank by. Leave empty to skip ranking."},
+            {"name": "RANK_ORDER",         "type": "str",  "default": "desc",         "help": "asc | desc"},
+            {"name": "RANK_COLUMN_NAME",   "type": "str",  "default": "_rank",        "help": "Name of the rank column."},
+            {"name": "KEEP_TOP_N",         "type": "int",  "default": "0",            "help": "Keep rows with rank <= N. 0 = keep all."},
+            {"name": "OUTPUT_DROP_COLUMNS","type": "list", "default": "[]",           "help": "Columns to drop from result. [] = keep all."},
+            {"name": "INSERT_COLUMN",      "type": "str",  "default": "",             "help": "Reposition this column after INSERT_AFTER_COLUMN. \"\" = skip."},
+            {"name": "INSERT_AFTER_COLUMN","type": "str",  "default": "",             "help": "Anchor column for reordering."},
+            {"name": "OUTPUT_DIR",         "type": "str",  "default": "",             "help": "Directory to write the output file."},
+            {"name": "OUTPUT_FILENAME",    "type": "str",  "default": "join_filter_agg.csv","help": "Name of the output file."},
+            {"name": "OUTPUT_FORMAT",      "type": "str",  "default": "csv",          "help": "csv | xlsx | json | parquet | tsv"},
+        ],
+    },
+
+    "file_zip_extract_join": {
+        "display_name": "ZIP Extract & Join",
+        "description":  "Extract two named files from a ZIP, join them, drop/reorder columns. All other ZIP contents can be passed through to the output directory.",
+        "function_sig": "preprocess(input_paths: list) -> list",
+        "input_type":   "single",
+        "parameters": [
+            {"name": "LEFT_FILE_IN_ZIP",    "type": "str",  "default": "filings.txt",           "help": "Filename of the primary (left) file inside the ZIP."},
+            {"name": "RIGHT_FILE_IN_ZIP",   "type": "str",  "default": "filingamendments.txt",  "help": "Filename of the secondary (right) file inside the ZIP."},
+            {"name": "SKIP_EXTENSIONS",     "type": "list", "default": "[\".sql\", \".rtf\"]",  "help": "File extensions to ignore inside the ZIP. [] = extract everything."},
+            {"name": "EXTRACT_OTHER_FILES", "type": "bool", "default": "True",                  "help": "If True, every other file in the ZIP (not LEFT, RIGHT, or skipped) is extracted to the output directory."},
+            {"name": "LEFT_USECOLS",        "type": "list", "default": "[]",                    "help": "Columns to load from the LEFT file. [] = all columns."},
+            {"name": "RIGHT_USECOLS",       "type": "list", "default": "[]",                    "help": "Columns to load from the RIGHT file. [] = all columns."},
+            {"name": "DEDUP_RIGHT_BY",      "type": "str",  "default": "",                      "help": "Deduplicate RIGHT file on this column before joining. \"\" = skip."},
+            {"name": "DEDUP_KEEP",          "type": "str",  "default": "first",                 "help": "first | last — which duplicate row to keep."},
+            {"name": "JOIN_KEY",            "type": "str",  "default": "FileNumber",            "help": "Shared join column name. Used when LEFT_KEY / RIGHT_KEY are empty."},
+            {"name": "LEFT_KEY",            "type": "str",  "default": "",                      "help": "Join column in the LEFT file when it differs from JOIN_KEY. \"\" = use JOIN_KEY."},
+            {"name": "RIGHT_KEY",           "type": "str",  "default": "",                      "help": "Join column in the RIGHT file when it differs from JOIN_KEY. \"\" = use JOIN_KEY."},
+            {"name": "JOIN_TYPE",           "type": "str",  "default": "left",                  "help": "left | inner | right | outer"},
+            {"name": "LEFT_SUFFIX",         "type": "str",  "default": "_left",                 "help": "Suffix for overlapping columns from the LEFT file."},
+            {"name": "RIGHT_SUFFIX",        "type": "str",  "default": "_right",                "help": "Suffix for overlapping columns from the RIGHT file."},
+            {"name": "OUTPUT_DROP_COLUMNS", "type": "list", "default": "[]",                    "help": "Columns to drop from merged result. [] = keep all."},
+            {"name": "INSERT_COLUMN",       "type": "str",  "default": "",                      "help": "Reposition this column immediately after INSERT_AFTER_COLUMN. \"\" = skip."},
+            {"name": "INSERT_AFTER_COLUMN", "type": "str",  "default": "",                      "help": "Anchor column for INSERT_COLUMN repositioning."},
+            {"name": "OUTPUT_FILENAME",     "type": "str",  "default": "filings_processed.txt", "help": "Filename for the merged output file."},
+            {"name": "OUTPUT_DIR",          "type": "str",  "default": "",                      "help": "Directory to write all output files. \"\" = same directory as the input ZIP."},
         ],
     },
 }
 
 _TEMPLATE_CHOICES = [(v["display_name"], k) for k, v in TEMPLATE_CATALOG.items()]
+_TEMPLATE_CATEGORIES["All"] = [k for k in TEMPLATE_CATALOG]
 
 # ---------------------------------------------------------------------------
 # Per-template input file configuration
@@ -388,21 +722,39 @@ _INPUT_FILE_CONFIG: dict[str, list[dict]] = {
     "file_aggregate":       [{"label": "Input File",                   "key": "input_path"}],
     "file_delta_load":      [{"label": "New File (current data)",      "key": "new_path"},
                              {"label": "Old / Reference File",         "key": "old_path"}],
-    "file_rank_filter":     [{"label": "Input File",                   "key": "input_path"}],
-    "file_filter_by_values":[{"label": "Input File",                   "key": "input_path"}],
-    "file_join_filter_agg": [{"label": "Left File",                    "key": "left_path"},
-                              {"label": "Right File",                   "key": "right_path"}],
+    "file_rank_filter":       [{"label": "Input File",                   "key": "input_path"}],
+    "file_filter_by_values":  [{"label": "Input File",                   "key": "input_path"}],
+    "file_join_filter_agg":   [{"label": "Left File",                    "key": "left_path"},
+                                {"label": "Right File",                   "key": "right_path"}],
+    "file_zip_extract_join":   [{"label": "ZIP File (comma-separated if multiple)", "key": "input_paths", "multi": True}],
+    # ZIP variants — same slot structure as their originals
+    "file_join_two_zip":        [{"label": "Left ZIP File",               "key": "left_path"},
+                                 {"label": "Right ZIP File",              "key": "right_path"}],
+    "file_join_multi_key_zip":  [{"label": "Left ZIP File",               "key": "left_path"},
+                                 {"label": "Right ZIP File",              "key": "right_path"}],
+    "file_denormalize_zip":     [{"label": "Header ZIP File",             "key": "header_path"},
+                                 {"label": "Detail ZIP File",             "key": "detail_path"}],
+    "file_delta_load_zip":      [{"label": "New ZIP File (current data)", "key": "new_path"},
+                                 {"label": "Old ZIP File (reference)",    "key": "old_path"}],
+    "file_join_filter_agg_zip": [{"label": "Left ZIP File",               "key": "left_path"},
+                                 {"label": "Right ZIP File",              "key": "right_path"}],
 }
 _MAX_FILE_SLOTS = 2   # maximum file inputs shown (single uses slot 1 only)
 
 # Maps 2-file template names → (placeholder_for_file1, placeholder_for_file2)
 # These are auto-injected from the UI file selectors — NOT shown in the params JSON.
 _TWO_FILE_PLACEHOLDERS: dict[str, tuple[str, str]] = {
-    "file_join_two":        ("LEFT_FILENAME",   "RIGHT_FILENAME"),
-    "file_join_multi_key":  ("LEFT_FILENAME",   "RIGHT_FILENAME"),
-    "file_denormalize":     ("HEADER_FILENAME", "DETAIL_FILENAME"),
-    "file_delta_load":      ("NEW_FILENAME",    "OLD_FILENAME"),
-    "file_join_filter_agg": ("LEFT_FILENAME",   "RIGHT_FILENAME"),
+    "file_join_two":            ("LEFT_FILENAME",   "RIGHT_FILENAME"),
+    "file_join_multi_key":      ("LEFT_FILENAME",   "RIGHT_FILENAME"),
+    "file_denormalize":         ("HEADER_FILENAME", "DETAIL_FILENAME"),
+    "file_delta_load":          ("NEW_FILENAME",    "OLD_FILENAME"),
+    "file_join_filter_agg":     ("LEFT_FILENAME",   "RIGHT_FILENAME"),
+    # ZIP variants reuse the same placeholders
+    "file_join_two_zip":        ("LEFT_FILENAME",   "RIGHT_FILENAME"),
+    "file_join_multi_key_zip":  ("LEFT_FILENAME",   "RIGHT_FILENAME"),
+    "file_denormalize_zip":     ("HEADER_FILENAME", "DETAIL_FILENAME"),
+    "file_delta_load_zip":      ("NEW_FILENAME",    "OLD_FILENAME"),
+    "file_join_filter_agg_zip": ("LEFT_FILENAME",   "RIGHT_FILENAME"),
 }
 
 
@@ -513,6 +865,75 @@ def _sniff_load_zip(file_path: str, max_rows: int) -> pd.DataFrame:
     return pd.DataFrame({"error": ["No loadable file found in ZIP"]})
 
 
+_ZIP_LOADABLE_EXTS  = {".csv", ".tsv", ".txt", ".xlsx", ".xls", ".json", ".xml"}
+_ZIP_SKIP_EXTS      = {".sql", ".rtf", ".exe", ".bat", ".sh", ".dll", ".so", ".py", ".zip"}
+
+
+def _scan_zip_contents(fpath: Path) -> list[dict]:
+    """
+    Open a ZIP and return one result-dict per inner file.
+    Each dict matches the _scan_one_file() shape plus:
+        is_zip_entry : True
+        inner_name   : bare filename inside the ZIP  (e.g. "filings.txt")
+        zip_name     : ZIP filename                  (e.g. "test_batch.zip")
+    'path' always points to the ZIP file (what preprocess() receives).
+    'name' is the display label "zipname → innerfile".
+    """
+    results: list[dict] = []
+    zip_name = fpath.name
+    zip_path = str(fpath)
+
+    def _make_entry(inner_name, inner_ext, status, rows, cols, columns, preview, error=""):
+        return {
+            "name":         f"{zip_name} → {inner_name}",
+            "path":         zip_path,
+            "ext":          inner_ext or "(none)",
+            "rows":         rows,
+            "cols":         cols,
+            "columns":      columns,
+            "preview":      preview,
+            "status":       status,
+            "error":        error,
+            "large":        False,
+            "is_zip_entry": True,
+            "inner_name":   inner_name,
+            "zip_name":     zip_name,
+        }
+
+    try:
+        with zipfile.ZipFile(zip_path, "r") as z:
+            inner_names = [
+                n for n in z.namelist()
+                if not n.endswith("/")
+                and not Path(n).name.startswith(".")
+                and Path(n).suffix.lower() not in _ZIP_SKIP_EXTS
+            ]
+            for inner_path in inner_names:
+                bare      = Path(inner_path).name
+                inner_ext = Path(inner_path).suffix.lower()
+
+                if inner_ext not in _ZIP_LOADABLE_EXTS:
+                    results.append(_make_entry(bare, inner_ext, "📦", "—", "—", [], {}))
+                    continue
+
+                try:
+                    with tempfile.TemporaryDirectory() as tmp_dir:
+                        z.extract(inner_path, tmp_dir)
+                        extracted = os.path.join(tmp_dir, inner_path)
+                        df      = _sniff_load(extracted, max_rows=10)
+                        ncol    = len(df.columns)
+                        cols    = [str(c) for c in df.columns.tolist()]
+                        nrow    = _count_rows_fast(extracted, df)
+                        preview = df.head(10).astype(str).to_dict(orient="split")
+                    results.append(_make_entry(bare, inner_ext, "✅", nrow, ncol, cols, preview))
+                except Exception as exc:
+                    results.append(_make_entry(bare, inner_ext, "⚠️", 0, 0, [], {}, str(exc)))
+    except Exception as exc:
+        results.append(_make_entry(zip_name, ".zip", "⚠️", 0, 0, [], {}, f"Cannot open ZIP: {exc}"))
+
+    return results
+
+
 _MAX_FOLDER_FILES = 10   # hard limit on files per folder scan
 
 # ---------------------------------------------------------------------------
@@ -527,6 +948,19 @@ def _scan_one_file(fpath: Path) -> dict:
     """Scan a single file and return a result dict. Runs in a thread."""
     name = fpath.name
     ext  = fpath.suffix.lower() or "(none)"
+    file_size = fpath.stat().st_size
+
+    # Large-file guard: skip full column read for very large files
+    if file_size > _LARGE_FILE_BYTES:
+        size_mb = file_size / 1_048_576
+        return {
+            "name": name, "path": str(fpath), "ext": ext,
+            "rows": -1, "cols": -1, "columns": [], "preview": {},
+            "status": "⚠️",
+            "error": f"Large file ({size_mb:.0f} MB) — select in Tab 1 to inspect columns.",
+            "large": True,
+        }
+
     try:
         # Load 10 rows — enough for columns + cached preview in show_file_detail
         df    = _sniff_load(str(fpath), max_rows=10)
@@ -552,6 +986,7 @@ def _scan_one_file(fpath: Path) -> dict:
         "preview": preview_records,   # cached — no second disk read in show_file_detail
         "status":  status,
         "error":   locals().get("exc_str", ""),
+        "large":   False,
     }
 
 
@@ -606,57 +1041,123 @@ def scan_folder(folder_path: str):
     if cache_key in _scan_cache:
         return _make_scan_result(_scan_cache[cache_key])
 
-    # ── Parallel scan ────────────────────────────────────────────────────────
-    results_by_name: dict[str, dict] = {}
-    with ThreadPoolExecutor(max_workers=min(len(all_files), 6)) as pool:
-        future_map = {pool.submit(_scan_one_file, fpath): fpath for fpath in all_files}
-        for future in as_completed(future_map):
-            r = future.result()
-            results_by_name[r["name"]] = r
+    # ── Parallel scan (non-ZIP files only) ───────────────────────────────────
+    non_zip_files = [p for p in all_files if p.suffix.lower() != ".zip"]
+    zip_files     = [p for p in all_files if p.suffix.lower() == ".zip"]
 
-    # Restore original sort order (as_completed returns in completion order)
-    ordered = [results_by_name[fpath.name] for fpath in all_files if fpath.name in results_by_name]
+    results_by_name: dict[str, dict] = {}
+    if non_zip_files:
+        with ThreadPoolExecutor(max_workers=min(len(non_zip_files), 6)) as pool:
+            future_map = {pool.submit(_scan_one_file, fpath): fpath for fpath in non_zip_files}
+            for future in as_completed(future_map):
+                r = future.result()
+                results_by_name[r["name"]] = r
+
+    # ── Expand ZIP contents (parallel across ZIPs) ────────────────────────────
+    zip_inner_results: dict[str, list[dict]] = {}   # zip_name → list of inner dicts
+    if zip_files:
+        with ThreadPoolExecutor(max_workers=min(len(zip_files), 4)) as pool:
+            future_map = {pool.submit(_scan_zip_contents, fpath): fpath for fpath in zip_files}
+            for future in as_completed(future_map):
+                inner_list = future.result()
+                if inner_list:
+                    zip_name = inner_list[0]["zip_name"]
+                    zip_inner_results[zip_name] = inner_list
+
+    # ── Build ordered display list ────────────────────────────────────────────
+    # Non-ZIP files in original sort order, then expand each ZIP in sort order
+    display_entries: list[dict] = []
+    for fpath in all_files:
+        if fpath.suffix.lower() == ".zip":
+            display_entries.extend(zip_inner_results.get(fpath.name, []))
+        elif fpath.name in results_by_name:
+            display_entries.append(results_by_name[fpath.name])
 
     file_data: dict[str, dict] = {}
     rows_html = ""
     all_columns: dict[str, list[str]] = {}
-    filename_choices = ["(none)"]
+    filename_choices = ["(none)"]          # Tab-2 dropdown: ZIP names + regular filenames
+    tab1_selector_choices: list[str] = []  # Tab-1 radio: expanded inner names + regular filenames
 
-    for r in ordered:
+    # Track which ZIP names we've already added to filename_choices
+    _zip_names_added: set[str] = set()
+
+    for r in display_entries:
         name     = r["name"]
         ext      = r["ext"]
         nrow     = r["rows"]
         ncol     = r["cols"]
         cols     = r["columns"]
-        cols_all = ", ".join(cols)
         status   = r["status"]
+        is_zip   = r.get("is_zip_entry", False)
+        zip_name = r.get("zip_name", "")
 
+        # Store in file_data for show_file_detail
         file_data[name] = {
-            "path":    r["path"],
-            "ext":     ext,
-            "rows":    nrow,
-            "cols":    ncol,
-            "columns": cols,
-            "preview": r["preview"],
+            "path":         r["path"],
+            "ext":          ext,
+            "rows":         nrow,
+            "cols":         ncol,
+            "columns":      cols,
+            "preview":      r["preview"],
+            "is_zip_entry": is_zip,
+            "inner_name":   r.get("inner_name", ""),
+            "zip_name":     zip_name,
         }
+
         if cols:
             all_columns[name] = cols
-        filename_choices.append(name)
+
+        # Tab-1 selector: always show expanded inner names
+        tab1_selector_choices.append(name)
+
+        # Tab-2 filename dropdown: show the ZIP filename once (not inner names)
+        if is_zip:
+            if zip_name not in _zip_names_added:
+                filename_choices.append(zip_name)
+                _zip_names_added.add(zip_name)
+        else:
+            filename_choices.append(name)
+
+        # HTML table row
+        nrow_display = f"{nrow:,}" if isinstance(nrow, int) and nrow >= 0 else str(nrow)
+        ncol_display = str(ncol) if isinstance(ncol, int) else str(ncol)
+        cols_all     = ", ".join(cols)
+        if is_zip:
+            # Indented inner-file row with ZIP chain indicator
+            name_cell = (
+                f"<span style='color:#aaa;font-size:0.8em'>📦 {zip_name}</span> "
+                f"<span style='color:#888'>›</span> "
+                f"<b style='color:#1a6e9e'>{r['inner_name']}</b>"
+            )
+            row_bg = "background:#f9fbff"
+        else:
+            name_cell = f"<b>{name}</b>"
+            row_bg    = ""
+
         rows_html += (
-            f"<tr style='vertical-align:top'>"
+            f"<tr style='vertical-align:top;{row_bg}'>"
             f"<td style='padding:6px 12px'>{status}</td>"
-            f"<td style='padding:6px 12px;white-space:nowrap'><b>{name}</b></td>"
+            f"<td style='padding:6px 12px;white-space:nowrap'>{name_cell}</td>"
             f"<td style='padding:6px 12px'>{ext}</td>"
-            f"<td style='padding:6px 12px'>{nrow:,}</td>"
-            f"<td style='padding:6px 12px'>{ncol}</td>"
+            f"<td style='padding:6px 12px'>{nrow_display}</td>"
+            f"<td style='padding:6px 12px'>{ncol_display}</td>"
             f"<td style='padding:6px 12px;color:#333;font-size:0.85em'>{cols_all}</td>"
             f"</tr>"
         )
 
-    total = len(all_files)
+    total      = len(all_files)
+    n_zip      = len(zip_files)
+    n_expanded = sum(len(v) for v in zip_inner_results.values())
+    zip_note   = (
+        f" &nbsp;<span style='color:#1a6e9e;font-size:0.88em'>"
+        f"({n_zip} ZIP{'s' if n_zip>1 else ''}, {n_expanded} inner file{'s' if n_expanded!=1 else ''} expanded)"
+        f"</span>"
+    ) if n_zip else ""
+
     summary_html = (
         f"<div style='margin-bottom:8px;color:#555'>📂 <b>{folder_path}</b> &nbsp;—&nbsp; "
-        f"{total} file(s) found</div>"
+        f"{total} file(s) found{zip_note}</div>"
         "<table style='border-collapse:collapse;width:100%'>"
         "<thead><tr style='background:#f0f0f0'>"
         "<th style='padding:6px 12px'></th>"
@@ -690,27 +1191,26 @@ def scan_folder(folder_path: str):
         else "<p style='color:gray'>No columns detected.</p>"
     )
 
-    filenames = list(file_data.keys())
     # Cache raw data only — gr.update() objects are single-use Gradio descriptors
     # and must be freshly created on every return.
     _scan_cache[cache_key] = {
-        "summary_html":      summary_html,
-        "filenames":         filenames,
-        "file_data_json":    json.dumps(file_data),
-        "cols_info_html":    cols_info_html,
-        "filename_choices":  filename_choices,
-        "base_location":     str(folder),
+        "summary_html":         summary_html,
+        "tab1_choices":         tab1_selector_choices,
+        "file_data_json":       json.dumps(file_data),
+        "cols_info_html":       cols_info_html,
+        "filename_choices":     filename_choices,
+        "base_location":        str(folder),
     }
     return _make_scan_result(_scan_cache[cache_key])
 
 
 def _make_scan_result(cached: dict) -> tuple:
     """Reconstruct the scan return tuple from cached raw data (fresh gr.update() each time)."""
-    filenames        = cached["filenames"]
+    tab1_choices     = cached["tab1_choices"]
     filename_choices = cached["filename_choices"]
     return (
         cached["summary_html"],
-        gr.update(choices=filenames, value=filenames[0] if filenames else None),
+        gr.update(choices=tab1_choices, value=tab1_choices[0] if tab1_choices else None),
         cached["file_data_json"],
         cached["cols_info_html"],
         gr.update(choices=filename_choices, value="(none)"),
@@ -718,52 +1218,101 @@ def _make_scan_result(cached: dict) -> tuple:
     )
 
 
-def show_file_detail(selected_name: str, file_data_json: str):
+def show_file_detail(selected_name: str, file_data_json: str, selected_sheet: str = ""):
     """
-    Return (file_info_html, preview_df) for the selected file.
+    Return (file_info_html, preview_df, profile_df, sheet_picker_update, col_profile_update)
+    for the selected file.
     Uses the preview cached during scan_folder — no disk read on selection.
+    When selected_sheet is set (Excel), re-reads from disk using that sheet.
     """
+    _EMPTY = (
+        "<p style='color:gray'>Select a file above.</p>",
+        pd.DataFrame(), pd.DataFrame(),
+        gr.update(choices=[], visible=False, value=None),
+        gr.update(visible=False),
+    )
     if not selected_name or not file_data_json:
-        return "<p style='color:gray'>Select a file above.</p>", pd.DataFrame()
+        return _EMPTY
     try:
         file_data = json.loads(file_data_json)
     except Exception:
-        return "<p style='color:red'>State error.</p>", pd.DataFrame()
+        return ("<p style='color:red'>State error.</p>", pd.DataFrame(), pd.DataFrame(),
+                gr.update(choices=[], visible=False, value=None), gr.update(visible=False))
     entry = file_data.get(selected_name)
     if not entry:
-        return "<p style='color:red'>File not found in state.</p>", pd.DataFrame()
+        return ("<p style='color:red'>File not found in state.</p>", pd.DataFrame(), pd.DataFrame(),
+                gr.update(choices=[], visible=False, value=None), gr.update(visible=False))
 
-    # Use cached preview (stored during scan) — avoids a second disk read
-    preview = entry.get("preview")
-    if preview and preview.get("data") and preview.get("columns"):
-        df = pd.DataFrame(preview["data"], columns=preview["columns"])
+    file_path = entry["path"]
+    ext = entry.get("ext", "").lower()
+    is_zip_entry = entry.get("is_zip_entry", False)
+
+    # Sheet picker — only for direct Excel files (not ZIP inner files)
+    sheet_names: list[str] = []
+    sheet_picker_update = gr.update(choices=[], visible=False, value=None)
+    if not is_zip_entry and ext in (".xlsx", ".xls"):
+        try:
+            xf = pd.ExcelFile(file_path)
+            sheet_names = xf.sheet_names
+            if sheet_names:
+                current_sheet = selected_sheet if selected_sheet in sheet_names else sheet_names[0]
+                sheet_picker_update = gr.update(
+                    choices=sheet_names, value=current_sheet, visible=True
+                )
+        except Exception:
+            pass
+
+    # Load data
+    df: pd.DataFrame = pd.DataFrame()
+    if is_zip_entry:
+        # Always use the cached preview — file_path points to the ZIP, not the inner file
+        preview = entry.get("preview")
+        if preview and preview.get("data") and preview.get("columns"):
+            df = pd.DataFrame(preview["data"], columns=preview["columns"])
+    elif ext in (".xlsx", ".xls") and selected_sheet and sheet_names:
+        try:
+            df = pd.read_excel(file_path, sheet_name=selected_sheet, nrows=10)
+        except Exception:
+            df = pd.DataFrame()
     else:
-        # Fallback: read from disk (e.g. state loaded from older session)
-        df = _sniff_load(entry["path"], max_rows=10).astype(str)
+        preview = entry.get("preview")
+        if preview and preview.get("data") and preview.get("columns"):
+            df = pd.DataFrame(preview["data"], columns=preview["columns"])
+        else:
+            df = _sniff_load(file_path, max_rows=10)
 
     if df.empty:
-        return "<p style='color:orange'>File loaded but no data found.</p>", pd.DataFrame()
+        return (
+            "<p style='color:orange'>File loaded but no data found.</p>",
+            pd.DataFrame(), pd.DataFrame(), sheet_picker_update, gr.update(visible=False),
+        )
 
-    # All column names as chips
+    # Column chips
+    cols_to_show = [str(c) for c in df.columns.tolist()] if df is not None else entry.get("columns", [])
     col_chips = "".join(
         f"<span style='display:inline-block;background:#e8f0fe;color:#1a6e9e;"
         f"border-radius:3px;padding:2px 8px;margin:2px 3px;font-family:monospace;"
         f"font-size:0.85em'>{c}</span>"
-        for c in entry["columns"]
+        for c in cols_to_show
     )
 
+    rows_val = entry.get('rows', 0)
+    rows_display = f"{rows_val:,}" if isinstance(rows_val, int) and rows_val >= 0 else "?"
     info_html = (
         f"<div style='padding:10px 14px;background:#f8f9fa;border-left:4px solid #1a6e9e;"
         f"border-radius:4px;margin-bottom:10px'>"
         f"<b>File:</b> {selected_name} &nbsp;|&nbsp; "
-        f"<b>Extension:</b> {entry['ext']} &nbsp;|&nbsp; "
-        f"<b>Rows:</b> {entry['rows']:,} &nbsp;|&nbsp; "
-        f"<b>Columns ({entry['cols']}):</b><br/>"
+        f"<b>Extension:</b> {ext} &nbsp;|&nbsp; "
+        f"<b>Rows:</b> {rows_display} &nbsp;|&nbsp; "
+        f"<b>Columns ({len(cols_to_show)}):</b><br/>"
         f"<div style='margin-top:6px'>{col_chips}</div>"
         f"</div>"
     )
 
-    return info_html, df.head(10)
+    # Build profile
+    profile_df = profile_file(df=df.copy())
+
+    return info_html, df.head(10), profile_df, sheet_picker_update, gr.update(visible=True)
 
 
 # ---------------------------------------------------------------------------
@@ -902,6 +1451,33 @@ def _append_col_to_list(col_val: str, param_key: str, current_json: str) -> str:
         existing.append(col_val)
         d[param_key] = existing
     return json.dumps(d, indent=2)
+
+
+def _get_zip_inner_files(zip_name: str, file_data_json: str) -> list[str]:
+    """Return sorted inner file names for a given ZIP from the scanned file_data_state."""
+    try:
+        file_data = json.loads(file_data_json)
+    except Exception:
+        return []
+    inner_files: list[str] = []
+    for entry in file_data.values():
+        if entry.get("is_zip_entry") and entry.get("zip_name") == zip_name:
+            inner = entry.get("inner_name", "")
+            if inner and inner not in inner_files:
+                inner_files.append(inner)
+    return sorted(inner_files)
+
+
+def _set_inner_file_param(inner_file: str, param_key: str, params_json: str) -> str:
+    """Write LEFT_INNER_FILE or RIGHT_INNER_FILE into the params JSON box."""
+    if not inner_file or not params_json:
+        return params_json
+    try:
+        d = json.loads(params_json)
+        d[param_key] = inner_file
+        return json.dumps(d, indent=2)
+    except Exception:
+        return params_json
 
 
 def _auto_fill_output_params(
@@ -1136,10 +1712,13 @@ def generate_script(
     elif not safe_name.endswith(".py"):
         safe_name += ".py"
 
+    # Resolve ZIP variant → actual template file
+    actual_template_name = _ZIP_TEMPLATE_ALIASES.get(template_name, template_name)
+
     with tempfile.TemporaryDirectory() as tmp_dir:
         try:
             generated_path = generate_preprocessor(
-                template_name=template_name,
+                template_name=actual_template_name,
                 parameters=gen_params,
                 output_script_name=safe_name,
                 output_dir=tmp_dir,
@@ -1158,6 +1737,7 @@ def generate_script(
             return f"<p style='color:red'><b>WHERE injection failed:</b> {exc}</p>", "", None
 
     # Append __main__ block (uses base_location + filenames)
+    # Use template_name (catalog key) so _INPUT_FILE_CONFIG returns the right labels
     script_content += _build_main_block(
         template_name, base_location or "", file1_val or "", file2_val or ""
     )
@@ -1240,10 +1820,13 @@ def run_script(
     if not safe_name.endswith(".py"):
         safe_name += ".py"
 
+    # Resolve ZIP variant → actual template file
+    actual_template_name = _ZIP_TEMPLATE_ALIASES.get(template_name, template_name)
+
     with tempfile.TemporaryDirectory() as tmp_gen:
         try:
             gpath = generate_preprocessor(
-                template_name, gen_params, safe_name, tmp_gen, _TEMPLATES_DIR,
+                actual_template_name, gen_params, safe_name, tmp_gen, _TEMPLATES_DIR,
             )
             script_content = Path(gpath).read_text(encoding="utf-8")
         except Exception as exc:
@@ -1334,16 +1917,20 @@ def run_script(
         ) + EMPTY[1:]
 
     # ── 5. Collect output files ───────────────────────────────────────────
-    result_path = Path(str(result))
-    if result_path.is_file():
-        output_files = [result_path]
-    elif result_path.is_dir():
-        output_files = sorted(
-            f for f in result_path.iterdir()
-            if f.is_file() and not f.name.startswith(".")
-        )
+    # preprocess() may return: str path, list[str], or tuple[str]
+    if isinstance(result, (list, tuple)):
+        output_files = [Path(str(p)) for p in result if Path(str(p)).is_file()]
     else:
-        output_files = []
+        result_path = Path(str(result))
+        if result_path.is_file():
+            output_files = [result_path]
+        elif result_path.is_dir():
+            output_files = sorted(
+                f for f in result_path.iterdir()
+                if f.is_file() and not f.name.startswith(".")
+            )
+        else:
+            output_files = []
 
     if not output_files:
         return (
@@ -1421,68 +2008,391 @@ def run_script(
 
 
 # ---------------------------------------------------------------------------
+# Phase B helpers — presets, WHERE builder, validation, output-col preview
+# ---------------------------------------------------------------------------
+
+def _save_preset(template_name: str, params_json: str, where: str) -> str:
+    """Serialize current config to a JSON file path for download."""
+    data = {"template_name": template_name, "params_json": params_json, "where": where}
+    tmp = tempfile.mkdtemp(prefix="pplib_preset_")
+    path = os.path.join(tmp, f"{template_name}_preset.json")
+    Path(path).write_text(json.dumps(data, indent=2), encoding="utf-8")
+    return path
+
+
+def _load_preset(file_obj) -> tuple:
+    """Load a preset JSON file; return (template_name, params_json, where)."""
+    if file_obj is None:
+        return None, "{}", ""
+    try:
+        content = Path(file_obj.name).read_text(encoding="utf-8")
+        data = json.loads(content)
+        return data.get("template_name"), data.get("params_json", "{}"), data.get("where", "")
+    except Exception:
+        return None, "{}", ""
+
+
+def _build_where_from_rows(
+    col1: str, op1: str, val1: str,
+    col2: str, op2: str, val2: str, conn2: str,
+    col3: str, op3: str, val3: str, conn3: str,
+) -> str:
+    """Convert visual WHERE builder rows to a pandas query() string."""
+    def _clause(col: str, op: str, val: str) -> str:
+        if not col or col == "(none)" or not val.strip():
+            return ""
+        val = val.strip()
+        if op == "contains":
+            return f"{col}.str.contains('{val}', na=False)"
+        if op == "startswith":
+            return f"{col}.str.startswith('{val}', na=False)"
+        if op == "in":
+            items = ", ".join(f"'{v.strip()}'" for v in val.split(","))
+            return f"{col} in [{items}]"
+        # Numeric or quoted string
+        try:
+            float(val)
+            return f"{col} {op} {val}"
+        except ValueError:
+            return f"{col} {op} '{val}'"
+
+    parts = []
+    c1 = _clause(col1, op1, val1)
+    if c1:
+        parts.append(c1)
+    c2 = _clause(col2, op2, val2)
+    if c2:
+        parts.append((conn2 or "and") + " " + c2)
+    c3 = _clause(col3, op3, val3)
+    if c3:
+        parts.append((conn3 or "and") + " " + c3)
+    return " ".join(parts)
+
+
+def validate_params(
+    template_name: str,
+    params_json: str,
+    file1: str,
+    file2: str,
+    file_data_json: str,
+) -> str:
+    """
+    Run pre-flight checks on parameters. Returns HTML with warnings, or "" if all OK.
+    """
+    warnings: list[str] = []
+
+    # 1. JSON parse check
+    try:
+        params = json.loads(params_json)
+    except json.JSONDecodeError as exc:
+        return (
+            f"<div style='padding:8px 14px;background:#fff3cd;border-left:4px solid #f0ad4e;"
+            f"border-radius:4px'><b>⚠ JSON Error:</b> {exc}</div>"
+        )
+
+    # 2. File check
+    if not (file1 or "").strip():
+        warnings.append("No input file specified — please select or type a File 1 name.")
+
+    # 3. Column existence check (if we have scanned file data)
+    try:
+        file_data = json.loads(file_data_json) if file_data_json else {}
+    except Exception:
+        file_data = {}
+
+    all_cols: set[str] = set()
+    for entry in file_data.values():
+        all_cols.update(entry.get("columns", []))
+
+    col_params = ["JOIN_KEY", "SPLIT_COLUMN", "RANK_BY_COLUMN", "FILTER_COLUMN"]
+    for pname in col_params:
+        if pname in params and all_cols:
+            val = params[pname]
+            if val and val not in all_cols:
+                warnings.append(
+                    f"<b>{pname}</b> = '{val}' is not in the scanned columns — check the name."
+                )
+
+    list_col_params = ["KEY_COLUMNS", "JOIN_KEYS", "GROUP_BY_COLUMNS", "PARTITION_BY",
+                       "COMPARE_COLUMNS", "COMMON_KEY_COLUMNS"]
+    for pname in list_col_params:
+        if pname in params and all_cols and isinstance(params[pname], list):
+            for col in params[pname]:
+                if col and col not in all_cols:
+                    warnings.append(
+                        f"<b>{pname}</b>: '{col}' is not in the scanned columns."
+                    )
+
+    if not warnings:
+        return (
+            "<div style='padding:8px 14px;background:#eafaf1;border-left:4px solid #27ae60;"
+            "border-radius:4px'>✅ Parameters look good — ready to run.</div>"
+        )
+    items = "".join(f"<li>{w}</li>" for w in warnings)
+    return (
+        f"<div style='padding:8px 14px;background:#fff3cd;border-left:4px solid #f0ad4e;"
+        f"border-radius:4px'><b>⚠ Warnings ({len(warnings)}):</b><ul>{items}</ul></div>"
+    )
+
+
+def _preview_output_columns(
+    template_name: str, params_json: str, file1: str, file_data_json: str
+) -> str:
+    """
+    Best-effort estimate of the output column list based on template config.
+    Returns an HTML chip display. Reads only the scanned file metadata — no preprocess() call.
+    """
+    try:
+        params = json.loads(params_json)
+    except Exception:
+        return "<p style='color:red'>Invalid JSON — fix parameters first.</p>"
+
+    try:
+        file_data = json.loads(file_data_json) if file_data_json else {}
+    except Exception:
+        file_data = {}
+
+    # Get columns from scanned files
+    left_cols  = file_data.get(file1, {}).get("columns", []) if file1 else []
+    all_cols   = left_cols or []
+    for e in file_data.values():
+        for c in e.get("columns", []):
+            if c not in all_cols:
+                all_cols.append(c)
+
+    # Template-specific estimation
+    out_cols: list[str] = []
+    if template_name in ("file_join_two", "file_join_multi_key", "file_denormalize",
+                         "file_join_filter_agg",
+                         "file_join_two_zip", "file_join_multi_key_zip",
+                         "file_denormalize_zip", "file_join_filter_agg_zip"):
+        out_cols = list(all_cols)  # simplified: union of all scanned cols
+    elif template_name == "file_aggregate":
+        gb = params.get("GROUP_BY_COLUMNS", [])
+        agg = params.get("AGGREGATIONS", [])
+        out_cols = list(gb) + [a.get("output_column", a.get("column", "?")) for a in agg if isinstance(a, dict)]
+    elif template_name == "file_rename_columns":
+        mapping = params.get("COLUMN_MAPPING", {})
+        if params.get("DROP_UNMAPPED"):
+            out_cols = list(mapping.values())
+        else:
+            out_cols = [mapping.get(c, c) for c in all_cols]
+    elif template_name == "file_deduplicate":
+        out_cols = list(all_cols)
+    elif template_name == "file_cast_types":
+        out_cols = list(all_cols)
+    else:
+        out_cols = list(all_cols)
+
+    if not out_cols:
+        return "<p style='color:gray'>No column info available — scan a folder in Tab 1 first.</p>"
+
+    chips = "".join(
+        f"<span style='display:inline-block;background:#e8f0fe;color:#1a6e9e;"
+        f"border-radius:3px;padding:2px 8px;margin:2px 3px;font-family:monospace;"
+        f"font-size:0.85em'>{c}</span>"
+        for c in out_cols
+    )
+    return (
+        f"<details open><summary style='cursor:pointer;font-weight:600'>"
+        f"Estimated output columns ({len(out_cols)}) "
+        f"<span style='font-weight:normal;color:#888'>— actual may vary</span></summary>"
+        f"<div style='margin-top:6px'>{chips}</div></details>"
+    )
+
+
+def _lod_df_to_json(df_data, param_key: str) -> list:
+    """Convert gr.Dataframe value (list of lists) to list-of-dicts for params JSON."""
+    schema = _LOD_SCHEMAS.get(param_key, {})
+    headers = schema.get("headers", [])
+    result = []
+    if df_data is None:
+        return result
+    # df_data can be a list of lists or a DataFrame
+    if hasattr(df_data, "values"):
+        rows = df_data.values.tolist()
+    else:
+        rows = df_data
+    for row in rows:
+        if not any(str(v).strip() for v in row):
+            continue   # skip blank rows
+        d: dict = {}
+        for i, h in enumerate(headers):
+            val = row[i] if i < len(row) else ""
+            if h in ("values", "columns"):
+                # Convert comma-separated string to list
+                d[h] = [v.strip() for v in str(val).split(",") if v.strip()]
+            else:
+                d[h] = val
+        result.append(d)
+    return result
+
+
+def _json_to_lod_df(params_json: str, param_key: str):
+    """Extract list-of-dicts from params JSON and return as list-of-lists for gr.Dataframe."""
+    schema = _LOD_SCHEMAS.get(param_key, {})
+    headers = schema.get("headers", [])
+    default_row = schema.get("default_row", [""] * len(headers))
+    try:
+        params = json.loads(params_json)
+        lod = params.get(param_key, [])
+        if not isinstance(lod, list) or not lod:
+            return [default_row]
+        rows = []
+        for item in lod:
+            if not isinstance(item, dict):
+                continue
+            row = []
+            for h in headers:
+                val = item.get(h, "")
+                if isinstance(val, list):
+                    val = ", ".join(str(v) for v in val)
+                row.append(str(val))
+            rows.append(row)
+        return rows if rows else [default_row]
+    except Exception:
+        return [default_row]
+
+
+def _merge_lod_into_params(params_json: str, param_key: str, df_data) -> str:
+    """Update params_json with data from the interactive table editor."""
+    try:
+        params = json.loads(params_json)
+    except Exception:
+        params = {}
+    params[param_key] = _lod_df_to_json(df_data, param_key)
+    return json.dumps(params, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# Step indicator HTML helper  (Phase A3)
+# ---------------------------------------------------------------------------
+_STEP_LABELS = ["① Scan Folder", "② Pick Template", "③ Set Parameters", "④ Generate / Run"]
+
+def _step_indicator_html(active: int) -> str:
+    parts = []
+    for i, lbl in enumerate(_STEP_LABELS):
+        if i == active:
+            parts.append(
+                f"<span style='font-weight:700;color:#1a6e9e;padding:4px 12px;"
+                f"border-bottom:3px solid #1a6e9e'>{lbl}</span>"
+            )
+        else:
+            parts.append(
+                f"<span style='color:#aaa;padding:4px 12px'>{lbl}</span>"
+            )
+        if i < len(_STEP_LABELS) - 1:
+            parts.append("<span style='color:#ccc;padding:0 4px'>→</span>")
+    return (
+        "<div style='display:flex;align-items:center;background:#f8f9fa;"
+        "padding:8px 16px;border-radius:6px;margin-bottom:12px;flex-wrap:wrap'>"
+        + "".join(parts) + "</div>"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Folder browser helper  (Phase A1)
+# ---------------------------------------------------------------------------
+def _browse_folder() -> str:
+    """Open a native folder picker and return the selected path."""
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+        root = tk.Tk()
+        root.withdraw()
+        root.wm_attributes("-topmost", True)
+        path = filedialog.askdirectory(title="Select input folder")
+        root.destroy()
+        return path or ""
+    except Exception:
+        return ""
+
+
+# ---------------------------------------------------------------------------
+# Category filter helper  (Phase B1)
+# ---------------------------------------------------------------------------
+def _filter_template_choices(category: str) -> gr.update:
+    keys = _TEMPLATE_CATEGORIES.get(category, _TEMPLATE_CATEGORIES["All"])
+    choices = [(v["display_name"], k) for k, v in TEMPLATE_CATALOG.items() if k in keys]
+    if not choices:
+        choices = _TEMPLATE_CHOICES
+    return gr.update(choices=choices, value=choices[0][1])
+
+
+# ---------------------------------------------------------------------------
 # Gradio UI
 # ---------------------------------------------------------------------------
 
 def build_ui() -> gr.Blocks:
-    with gr.Blocks(title="Preprocessing Script Library", theme=gr.themes.Soft()) as app:
+    # _hist.init_db()  # HISTORY_TAB — uncomment to re-enable
 
-        gr.Markdown(
-            "# Preprocessing Script Library\n"
-            "Generate a ready-to-use `preprocess()` script from **17 templates**."
-        )
+    with gr.Blocks(title="PrepKit — Preprocessing Script Library") as app:
+
+        gr.Markdown("# PrepKit — Preprocessing Script Library\n"
+                    "Generate a ready-to-use `preprocess()` script from **18 templates**.")
+
+        # Step indicator (Phase A3)
+        step_html    = gr.HTML(value=_step_indicator_html(0))
+        step_state   = gr.State(0)
 
         # Shared state
-        file_data_state    = gr.State("{}")
-        base_location_state = gr.State("")   # folder path from Tab 1 scan
+        file_data_state     = gr.State("{}")
+        base_location_state = gr.State("")
+        pipeline_steps_state = gr.State([])   # Phase E
 
         with gr.Tabs():
 
-            # ── Tab 1: Explore Files ──────────────────────────────────────
+            # ── Tab 1: Explore Files ──────────────────────────────────────────
             with gr.Tab("1 — Explore Files"):
                 gr.Markdown(
-                    "Enter the path to your input folder (already unzipped). "
-                    "Maximum **10 files** are allowed. "
-                    "Select a file below to inspect its columns and data."
+                    "Enter your input folder path, or click **Browse** to pick one. "
+                    "Maximum **10 files** per scan. Select a file to inspect columns and data."
                 )
 
+                # Folder path + Browse button (Phase A1)
                 with gr.Row():
                     folder_path_box = gr.Textbox(
                         label="Input Folder Path",
                         placeholder="e.g.  C:/data/my_input_files",
                         interactive=True, scale=5,
                     )
-                    scan_btn = gr.Button("Scan Folder", variant="primary", scale=1)
+                    browse_btn = gr.Button("📂 Browse", scale=1)
+                    scan_btn   = gr.Button("Scan Folder", variant="primary", scale=1)
 
                 scan_status_html = gr.HTML(
                     value="<p style='color:gray'>Enter a folder path and click <b>Scan Folder</b>.</p>"
                 )
 
-                file_selector = gr.Dropdown(
-                    label="Select a file to explore",
-                    choices=[], interactive=True,
-                )
+                file_selector = gr.Dropdown(label="Select a file to explore", choices=[], interactive=True)
+
+                # Sheet picker (Phase A5) — visible only for Excel
+                sheet_picker = gr.Dropdown(label="Sheet (Excel only)", choices=[], visible=False, interactive=True)
 
                 file_info_html = gr.HTML()
 
                 gr.Markdown("**Data Preview (first 10 rows)**")
                 preview_df = gr.Dataframe(interactive=False, wrap=True)
 
-            # ── Tab 2: Generate Script ────────────────────────────────────
+                # Column profile (Phase A4)
+                with gr.Accordion("📊 Column Profile", open=False) as profile_accordion:
+                    profile_df_comp = gr.Dataframe(interactive=False, wrap=False)
+
+            # ── Tab 2: Generate Script ────────────────────────────────────────
             with gr.Tab("2 — Generate Script"):
 
-                # ── 1. Column reference ───────────────────────────────────
-                gr.Markdown(
-                    "### All Columns — use these exact names in your parameters",
-                    elem_id="cols_header",
-                )
+                # Column reference + column picker (C2)
+                gr.Markdown("### All Columns — use these exact names in your parameters")
                 cols_display = gr.HTML(
-                    value="<p style='color:gray'>Scan a folder in Tab 1 first — column names will appear here.</p>"
+                    value="<p style='color:gray'>Scan a folder in Tab 1 first.</p>"
                 )
-
                 gr.Markdown("---")
 
-                # ── 2. Template + config ──────────────────────────────────
+                # Category filter (Phase B1)
+                category_radio = gr.Radio(
+                    choices=list(_TEMPLATE_CATEGORIES.keys()),
+                    value="All", label="What do you want to do?", interactive=True,
+                )
+
                 template_dropdown  = gr.Dropdown(
                     label="Template",
                     choices=_TEMPLATE_CHOICES,
@@ -1492,18 +2402,13 @@ def build_ui() -> gr.Blocks:
                 template_desc_html = gr.HTML()
 
                 gr.Markdown("### Input File Name(s)")
-                gr.Markdown(
-                    "Select from files scanned in Tab 1, or type a name directly. "
-                    "File 2 appears only for two-file templates."
-                )
-
                 with gr.Row():
                     file1_dropdown = gr.Dropdown(
                         label="File 1 — select from scanned folder",
                         choices=["(none)"], value="(none)", interactive=True, scale=2,
                     )
                     file1_text = gr.Textbox(
-                        label="File 1 name (auto-filled or type manually)",
+                        label="File 1 name",
                         placeholder="e.g.  sales.csv",
                         interactive=True, scale=3,
                     )
@@ -1514,175 +2419,549 @@ def build_ui() -> gr.Blocks:
                         choices=["(none)"], value="(none)", interactive=True, scale=2,
                     )
                     file2_text = gr.Textbox(
-                        label="File 2 name (auto-filled or type manually)",
+                        label="File 2 name",
                         placeholder="e.g.  reference.csv",
                         interactive=True, scale=3,
                     )
 
+                # ZIP inner file selectors — visible only when the selected file is a ZIP
+                with gr.Row(visible=False) as zip1_inner_row:
+                    zip1_inner_dropdown = gr.Dropdown(
+                        label="Inner file in Left ZIP — sets LEFT_INNER_FILE",
+                        choices=[], value=None, interactive=True, scale=3,
+                        info="Pick which file inside the ZIP to use as the left input.",
+                    )
+                with gr.Row(visible=False) as zip2_inner_row:
+                    zip2_inner_dropdown = gr.Dropdown(
+                        label="Inner file in Right ZIP — sets RIGHT_INNER_FILE",
+                        choices=[], value=None, interactive=True, scale=3,
+                        info="Pick which file inside the ZIP to use as the right input.",
+                    )
+
+                # WHERE condition (Phase B3)
                 gr.Markdown("### WHERE Condition (optional pre-filter)")
                 with gr.Row():
                     where_box = gr.Textbox(
-                        label="WHERE Condition — pandas query() syntax, leave blank for no filter",
-                        placeholder="e.g.  status == 'ACTIVE'   or   amount > 0 and region == 'EU'",
+                        label="WHERE — pandas query() syntax, leave blank for no filter",
+                        placeholder="e.g.  status == 'ACTIVE'   or   amount > 0",
                         interactive=True, scale=4,
                     )
                     gr.HTML(
                         "<div style='font-size:0.82em;color:#555;padding-top:6px'>"
-                        "String values: <code>col == 'VALUE'</code><br/>"
+                        "Strings: <code>col == 'VALUE'</code><br/>"
                         "Numbers: <code>amount &gt; 100</code><br/>"
                         "Multiple: <code>a == 'X' and b &gt; 0</code>"
-                        "</div>",
-                        scale=2,
+                        "</div>", scale=2,
                     )
 
+                # Visual WHERE builder (Phase B3)
+                with gr.Accordion("🔍 Build WHERE condition visually", open=False):
+                    all_ops = _WHERE_OPS
+                    with gr.Row():
+                        wc1 = gr.Dropdown(label="Column", choices=["(none)"], value="(none)", scale=2, interactive=True)
+                        wo1 = gr.Dropdown(label="Operator", choices=all_ops, value="==", scale=1, interactive=True)
+                        wv1 = gr.Textbox(label="Value", placeholder="e.g. ACTIVE", scale=2, interactive=True)
+                    with gr.Row():
+                        wconn2 = gr.Dropdown(label="", choices=["and","or"], value="and", scale=1, interactive=True)
+                        wc2 = gr.Dropdown(label="Column", choices=["(none)"], value="(none)", scale=2, interactive=True)
+                        wo2 = gr.Dropdown(label="Operator", choices=all_ops, value="==", scale=1, interactive=True)
+                        wv2 = gr.Textbox(label="Value", placeholder="", scale=2, interactive=True)
+                    with gr.Row():
+                        wconn3 = gr.Dropdown(label="", choices=["and","or"], value="and", scale=1, interactive=True)
+                        wc3 = gr.Dropdown(label="Column", choices=["(none)"], value="(none)", scale=2, interactive=True)
+                        wo3 = gr.Dropdown(label="Operator", choices=all_ops, value="==", scale=1, interactive=True)
+                        wv3 = gr.Textbox(label="Value", placeholder="", scale=2, interactive=True)
+                    where_build_btn = gr.Button("→ Apply to WHERE box", variant="secondary")
+
+                # Preset save/load (Phase B2)
+                with gr.Accordion("💾 Save / Load Presets", open=False):
+                    with gr.Row():
+                        save_preset_btn  = gr.Button("💾 Save current config as preset", scale=2)
+                        preset_dl_file   = gr.File(label="Download preset", interactive=False, scale=2)
+                    with gr.Row():
+                        load_preset_file = gr.File(label="Load preset (.json)", file_types=[".json"],
+                                                   interactive=True, scale=2)
+                        load_preset_btn  = gr.Button("Load →", scale=1)
+
+                # Parameters (Phase C1 — JSON + visual table editor)
                 gr.Markdown("### Configuration Parameters")
                 with gr.Row():
                     with gr.Column(scale=3):
                         params_json_box = gr.Textbox(
-                            label="Parameters (JSON — edit values as needed)",
-                            lines=20, max_lines=40, placeholder="{}",
+                            label="Parameters (JSON)",
+                            lines=18, max_lines=40, placeholder="{}",
                         )
                     with gr.Column(scale=2):
                         param_help_html = gr.HTML()
 
+                # Visual table editor for list-of-dicts params
+                with gr.Accordion("📋 Visual Table Editor (for list parameters)", open=False) as lod_accordion:
+                    lod_label_html = gr.HTML("<p style='color:gray'>Select a template with list parameters.</p>")
+                    lod_editor = gr.Dataframe(
+                        headers=["col1", "col2"], datatype=["str","str"],
+                        interactive=True, wrap=True, row_count=(3,"dynamic"),
+                    )
+                    with gr.Row():
+                        lod_apply_btn  = gr.Button("Apply table to params JSON →", variant="secondary")
+                        lod_add_btn    = gr.Button("＋ Add Row")
+                    lod_param_key_state = gr.State("")   # which param key the editor is for
+
                 gr.Markdown("---")
 
-                # ── 3. Generate & Run ─────────────────────────────────────
+                # Output column preview (Phase B5)
+                with gr.Row():
+                    preview_cols_btn = gr.Button("🔎 Preview Output Columns", scale=1)
+                    col_preview_html = gr.HTML(scale=3)
+
+                # Validation panel (Phase B4)
+                validation_html = gr.HTML()
+
+                # Generate & Run
                 with gr.Row():
                     script_name_box = gr.Textbox(
-                        label="Output script filename (optional, auto-named if blank)",
-                        placeholder="e.g.  my_filter.py",
-                        scale=3,
+                        label="Output script filename (optional)",
+                        placeholder="e.g.  my_filter.py", scale=3,
                     )
                     generate_btn = gr.Button("Generate Script", variant="primary", scale=1)
-                    run_btn      = gr.Button("Run Script", variant="secondary", scale=1)
+                    run_btn      = gr.Button("▶ Run Script", variant="secondary", scale=1)
 
                 gr.Markdown("---")
 
-                # ── 4. Run Results (full width, no split) ─────────────────
+                # Run Results
                 gr.Markdown("#### Run Results")
-                run_status_html  = gr.HTML(
-                    value="<p style='color:gray'>Click <b>Run Script</b> to execute and see results.</p>"
-                )
+                run_status_html  = gr.HTML(value="<p style='color:gray'>Click <b>Run Script</b> to execute.</p>")
                 output_info_html = gr.HTML()
-                output_preview   = gr.Dataframe(
-                    label="Output preview (first 25 rows of first output file)",
-                    interactive=False, wrap=False,
-                )
-                output_download  = gr.File(
-                    label="Download output file(s)",
-                    interactive=False,
-                )
+                output_preview   = gr.Dataframe(label="Output preview (first 25 rows)", interactive=False, wrap=False)
+                output_download  = gr.File(label="Download output file(s)", interactive=False)
 
                 gr.Markdown("---")
 
-                # ── 5. Generated Script ───────────────────────────────────
+                # Generated Script
                 gr.Markdown("#### Generated Script")
                 gen_status_html = gr.HTML()
-                script_preview  = gr.Textbox(
-                    label="Script preview",
-                    lines=20, max_lines=60, interactive=False,
-                )
+                script_preview  = gr.Textbox(label="Script preview", lines=18, max_lines=60, interactive=False)
                 download_file   = gr.File(label="Download .py script", interactive=False)
 
-        # ── Event wiring ─────────────────────────────────────────────────
+                gr.Markdown("---")
 
-        # Tab 1: Scan Folder → also refresh OUTPUT_DIR in params JSON
+                # ── Phase E: Pipeline Builder ─────────────────────────────────
+                with gr.Accordion("🔗 Pipeline Mode — chain multiple steps", open=False):
+                    gr.Markdown(
+                        "Configure a template above, then click **＋ Add Step** to add it to the pipeline. "
+                        "Use `__prev__` as File 1 to chain from the previous step's output."
+                    )
+                    pipeline_display = gr.JSON(label="Pipeline steps", value=[])
+                    with gr.Row():
+                        pipeline_add_btn   = gr.Button("＋ Add current step", scale=1)
+                        pipeline_clear_btn = gr.Button("🗑 Clear pipeline", scale=1)
+                        pipeline_run_btn   = gr.Button("▶ Run Pipeline", variant="primary", scale=1)
+                    pipeline_status_html = gr.HTML()
+                    pipeline_preview_df  = gr.Dataframe(
+                        label="Last step output preview", interactive=False, wrap=False
+                    )
+
+            # ── Tab 3: History ────────────────────────────────────────────────
+            # HISTORY_TAB — uncomment the block below to re-enable
+            # with gr.Tab("3 — History"):
+            #     gr.Markdown("### Run History\nEvery Generate and Run action is logged here.")
+            #     with gr.Row():
+            #         hist_refresh_btn = gr.Button("🔄 Refresh", scale=1)
+            #         hist_clear_btn   = gr.Button("🗑 Clear All History", scale=1)
+            #     hist_table = gr.Dataframe(
+            #         value=_hist.history_dataframe(),
+            #         interactive=False, wrap=False,
+            #         label="Last 100 runs (newest first)",
+            #     )
+            #     gr.Markdown("**Selected run detail** — enter an ID from the table above:")
+            #     with gr.Row():
+            #         hist_id_box = gr.Number(label="Run ID", precision=0, scale=1)
+            #         hist_load_btn    = gr.Button("Re-load into Tab 2", scale=1)
+            #         hist_dl_btn      = gr.Button("Download script", scale=1)
+            #         hist_del_btn     = gr.Button("🗑 Delete this run", scale=1)
+            #     hist_detail_html   = gr.HTML()
+            #     hist_script_box    = gr.Textbox(label="Script content", lines=12, interactive=False)
+            #     hist_dl_file       = gr.File(label="Script download", interactive=False)
+
+        # ════════════════════════════════════════════════════════════════════
+        # Event wiring
+        # ════════════════════════════════════════════════════════════════════
+
+        # ── Browse button (A1) ───────────────────────────────────────────
+        browse_btn.click(fn=_browse_folder, inputs=[], outputs=[folder_path_box])
+
+        # ── Scan folder ──────────────────────────────────────────────────
         def _scan_and_update(folder_path, template_name, file1_val, params_json):
             status, sel_upd, fdata, cols_html, fn_upd, base_loc = scan_folder(folder_path)
             new_params = _auto_fill_output_params(params_json, template_name, file1_val, base_loc)
+            try:
+                all_cols = _get_all_columns(fdata)
+            except Exception:
+                all_cols = []
+            col_choices = ["(none)"] + all_cols
             return (
-                status,       # scan_status_html
-                sel_upd,      # file_selector
-                fdata,        # file_data_state
-                cols_html,    # cols_display (Tab 2 column reference)
-                fn_upd,       # file1_dropdown choices
-                fn_upd,       # file2_dropdown choices
-                base_loc,     # base_location_state
-                new_params,   # params_json_box
+                status, sel_upd, fdata, cols_html,
+                fn_upd, fn_upd,
+                base_loc, new_params,
+                _step_indicator_html(1), 1,
+                gr.update(choices=col_choices, value="(none)"),
+                gr.update(choices=col_choices, value="(none)"),
+                gr.update(choices=col_choices, value="(none)"),
+                gr.update(visible=False),  # hide zip1_inner_row
+                gr.update(visible=False),  # hide zip2_inner_row
             )
 
         scan_btn.click(
             fn=_scan_and_update,
             inputs=[folder_path_box, template_dropdown, file1_text, params_json_box],
-            outputs=[scan_status_html, file_selector, file_data_state,
-                     cols_display,
+            outputs=[scan_status_html, file_selector, file_data_state, cols_display,
                      file1_dropdown, file2_dropdown,
-                     base_location_state, params_json_box],
+                     base_location_state, params_json_box,
+                     step_html, step_state,
+                     wc1, wc2, wc3,
+                     zip1_inner_row, zip2_inner_row],
         )
 
-        # File selection in Tab 1 → show detail
+        # ── File selection in Tab 1 ───────────────────────────────────────
         file_selector.change(
             fn=show_file_detail,
-            inputs=[file_selector, file_data_state],
-            outputs=[file_info_html, preview_df],
+            inputs=[file_selector, file_data_state, sheet_picker],
+            outputs=[file_info_html, preview_df, profile_df_comp,
+                     sheet_picker, profile_accordion],
         )
 
-        # File name dropdowns → populate text boxes
-        def _pick_filename(dropdown_val: str) -> str:
-            if not dropdown_val or dropdown_val == "(none)":
-                return ""
-            return dropdown_val
+        sheet_picker.change(
+            fn=show_file_detail,
+            inputs=[file_selector, file_data_state, sheet_picker],
+            outputs=[file_info_html, preview_df, profile_df_comp,
+                     sheet_picker, profile_accordion],
+        )
 
-        # File dropdown selects → populate text box AND auto-fill output params
-        def _pick_and_autofill(dropdown_val, params_json, template_name, base_loc):
+        # ── File name dropdowns → text boxes + ZIP inner file selectors ──────
+        def _pick_and_autofill(dropdown_val, params_json, template_name, base_loc,
+                               file_data_json):
             fname = dropdown_val if dropdown_val and dropdown_val != "(none)" else ""
             new_params = _auto_fill_output_params(params_json, template_name, fname, base_loc)
-            return fname, new_params
+            is_zip = fname.lower().endswith(".zip") if fname else False
+            if is_zip:
+                inner_files = _get_zip_inner_files(fname, file_data_json)
+                zip_row_upd = gr.update(visible=True)
+                zip_dd_upd  = gr.update(choices=inner_files, value=None)
+            else:
+                zip_row_upd = gr.update(visible=False)
+                zip_dd_upd  = gr.update(choices=[], value=None)
+            return fname, new_params, zip_row_upd, zip_dd_upd
+
+        def _pick_file2_with_zip(dropdown_val, file_data_json):
+            fname = dropdown_val if dropdown_val and dropdown_val != "(none)" else ""
+            is_zip = fname.lower().endswith(".zip") if fname else False
+            if is_zip:
+                inner_files = _get_zip_inner_files(fname, file_data_json)
+                zip_row_upd = gr.update(visible=True)
+                zip_dd_upd  = gr.update(choices=inner_files, value=None)
+            else:
+                zip_row_upd = gr.update(visible=False)
+                zip_dd_upd  = gr.update(choices=[], value=None)
+            return fname, zip_row_upd, zip_dd_upd
 
         file1_dropdown.change(
             fn=_pick_and_autofill,
-            inputs=[file1_dropdown, params_json_box, template_dropdown, base_location_state],
-            outputs=[file1_text, params_json_box],
+            inputs=[file1_dropdown, params_json_box, template_dropdown,
+                    base_location_state, file_data_state],
+            outputs=[file1_text, params_json_box, zip1_inner_row, zip1_inner_dropdown],
         )
-        file2_dropdown.change(fn=_pick_filename, inputs=[file2_dropdown], outputs=[file2_text])
+        file2_dropdown.change(
+            fn=_pick_file2_with_zip,
+            inputs=[file2_dropdown, file_data_state],
+            outputs=[file2_text, zip2_inner_row, zip2_inner_dropdown],
+        )
 
-        # Removed file1_text.change → _auto_fill_output_params:
-        # firing on every keystroke caused constant JSON churn with no UX gain.
-        # Auto-fill now triggers on dropdown select and folder scan (both intentional actions).
+        # When user picks an inner file, inject it into the params JSON
+        zip1_inner_dropdown.change(
+            fn=lambda v, p: _set_inner_file_param(v, "LEFT_INNER_FILE", p),
+            inputs=[zip1_inner_dropdown, params_json_box],
+            outputs=[params_json_box],
+        )
+        zip2_inner_dropdown.change(
+            fn=lambda v, p: _set_inner_file_param(v, "RIGHT_INNER_FILE", p),
+            inputs=[zip2_inner_dropdown, params_json_box],
+            outputs=[params_json_box],
+        )
 
-        # Template change → update desc, params, help, file labels, auto-fill output
+        # ── Category filter (B1) ─────────────────────────────────────────
+        category_radio.change(
+            fn=_filter_template_choices,
+            inputs=[category_radio],
+            outputs=[template_dropdown],
+        )
+
+        # ── Template change ───────────────────────────────────────────────
         def _on_template_change(template_name, file1_val, base_loc):
             desc, params, help_html, lbl1, vis1, lbl2, vis2 = update_template_ui(template_name)
             params = _auto_fill_output_params(params, template_name, file1_val, base_loc)
+
+            # LOD editor setup (C1)
+            lod_param = _TEMPLATE_LOD_PARAM.get(template_name, "")
+            if lod_param and lod_param in _LOD_SCHEMAS:
+                schema = _LOD_SCHEMAS[lod_param]
+                lod_rows = _json_to_lod_df(params, lod_param)
+                lod_upd = gr.update(
+                    headers=schema["headers"],
+                    value=lod_rows,
+                    visible=True,
+                )
+                lod_label = f"<b>{schema['label']}</b> — edit rows below, then click Apply."
+            else:
+                lod_upd   = gr.update(visible=False)
+                lod_label = "<p style='color:gray'>This template has no list parameters to edit visually.</p>"
+
             return (
                 desc, params, help_html,
-                gr.update(label=lbl1), gr.update(label=lbl2),
-                gr.update(visible=vis2),
+                gr.update(label=f"{lbl1} — select from scanned folder"),  # file1_dropdown
+                gr.update(label=lbl1),                                     # file1_text
+                gr.update(label=f"{lbl2} — select from scanned folder"),  # file2_dropdown
+                gr.update(label=lbl2),                                     # file2_text
+                vis2,   # file2_row — vis2 is already gr.update(visible=...), don't double-wrap
+                gr.update(visible=False), gr.update(visible=False),        # hide ZIP inner rows
+                lod_upd, lod_label, lod_param,
+                _step_indicator_html(2), 2,
             )
 
         template_dropdown.change(
             fn=_on_template_change,
             inputs=[template_dropdown, file1_text, base_location_state],
             outputs=[template_desc_html, params_json_box, param_help_html,
-                     file1_text, file2_text, file2_row],
+                     file1_dropdown, file1_text, file2_dropdown, file2_text, file2_row,
+                     zip1_inner_row, zip2_inner_row,
+                     lod_editor, lod_label_html, lod_param_key_state,
+                     step_html, step_state],
         )
 
-        # Generate Script
+        # ── LOD editor apply (C1) ─────────────────────────────────────────
+        lod_apply_btn.click(
+            fn=_merge_lod_into_params,
+            inputs=[params_json_box, lod_param_key_state, lod_editor],
+            outputs=[params_json_box],
+        )
+
+        def _lod_add_row(current_df, param_key):
+            """Append a blank default row to the LOD editor."""
+            schema = _LOD_SCHEMAS.get(param_key, {})
+            default_row = schema.get("default_row", [])
+            if hasattr(current_df, "values"):
+                rows = current_df.values.tolist()
+            else:
+                rows = list(current_df) if current_df else []
+            rows.append(default_row)
+            return rows
+
+        lod_add_btn.click(
+            fn=_lod_add_row,
+            inputs=[lod_editor, lod_param_key_state],
+            outputs=[lod_editor],
+        )
+
+        # ── WHERE visual builder (B3) ─────────────────────────────────────
+        where_build_btn.click(
+            fn=_build_where_from_rows,
+            inputs=[wc1, wo1, wv1, wc2, wo2, wv2, wconn2, wc3, wo3, wv3, wconn3],
+            outputs=[where_box],
+        )
+
+        # ── Preset save/load (B2) ─────────────────────────────────────────
+        save_preset_btn.click(
+            fn=_save_preset,
+            inputs=[template_dropdown, params_json_box, where_box],
+            outputs=[preset_dl_file],
+        )
+
+        def _do_load_preset(file_obj):
+            tname, params, where = _load_preset(file_obj)
+            if tname and tname in TEMPLATE_CATALOG:
+                info = TEMPLATE_CATALOG[tname]
+                desc_html = (
+                    f"<div style='padding:8px 14px;background:#f8f9fa;"
+                    f"border-left:4px solid #1a6e9e;border-radius:4px'>"
+                    f"<b>{info['display_name']}</b></div>"
+                )
+                return tname, params, where, desc_html
+            return tname, params, where, ""
+
+        load_preset_btn.click(
+            fn=_do_load_preset,
+            inputs=[load_preset_file],
+            outputs=[template_dropdown, params_json_box, where_box, template_desc_html],
+        )
+
+        # ── Output column preview (B5) ────────────────────────────────────
+        preview_cols_btn.click(
+            fn=_preview_output_columns,
+            inputs=[template_dropdown, params_json_box, file1_text, file_data_state],
+            outputs=[col_preview_html],
+        )
+
+        # ── Validation (B4) — fires before Generate/Run via a wrapper ────
+        def _validate_then_generate(template_name, params_json, script_name,
+                                    base_loc, file1, file2, where, file_data_json):
+            val_html = validate_params(template_name, params_json, file1, file2, file_data_json)
+            gen_result = generate_script(template_name, params_json, script_name,
+                                         base_loc, file1, file2, where)
+            # HISTORY_TAB — uncomment to re-enable history logging
+            # status_ok = "ok" if "✅" in (gen_result[0] or "") else "error"
+            # _hist.log_run(
+            #     template_name=template_name,
+            #     display_name=TEMPLATE_CATALOG.get(template_name, {}).get("display_name", template_name),
+            #     params_json=params_json,
+            #     script_name=(script_name or template_name) + ".py",
+            #     action="generate",
+            #     status=status_ok,
+            #     output_summary=gen_result[0] or "",
+            #     script_content=gen_result[1] or "",
+            # )
+            return (val_html,) + gen_result + (_step_indicator_html(3), 3)
+
         generate_btn.click(
-            fn=generate_script,
+            fn=_validate_then_generate,
             inputs=[template_dropdown, params_json_box, script_name_box,
-                    base_location_state, file1_text, file2_text, where_box],
-            outputs=[gen_status_html, script_preview, download_file],
+                    base_location_state, file1_text, file2_text, where_box,
+                    file_data_state],
+            outputs=[validation_html, gen_status_html, script_preview, download_file,
+                     step_html, step_state],
         )
 
-        # Run Script
+        def _validate_then_run(template_name, params_json, script_name,
+                               base_loc, file1, file2, where, file_data_json):
+            val_html = validate_params(template_name, params_json, file1, file2, file_data_json)
+            run_result = run_script(template_name, params_json, script_name,
+                                    base_loc, file1, file2, where)
+            # HISTORY_TAB — uncomment to re-enable history logging
+            # status_ok = "ok" if "✅" in (run_result[0] or "") else "error"
+            # _hist.log_run(
+            #     template_name=template_name,
+            #     display_name=TEMPLATE_CATALOG.get(template_name, {}).get("display_name", template_name),
+            #     params_json=params_json,
+            #     script_name=(script_name or template_name) + ".py",
+            #     action="run",
+            #     status=status_ok,
+            #     output_summary=run_result[0] or "",
+            #     script_content="",
+            # )
+            return (val_html,) + run_result + (_step_indicator_html(3), 3)
+
         run_btn.click(
-            fn=run_script,
+            fn=_validate_then_run,
             inputs=[template_dropdown, params_json_box, script_name_box,
-                    base_location_state, file1_text, file2_text, where_box],
-            outputs=[run_status_html, output_info_html, output_preview, output_download],
+                    base_location_state, file1_text, file2_text, where_box,
+                    file_data_state],
+            outputs=[validation_html, run_status_html, output_info_html,
+                     output_preview, output_download,
+                     step_html, step_state],
         )
 
-        # Pre-load default template on startup
+        # ── Pipeline (Phase E) ────────────────────────────────────────────
+        def _add_pipeline_step(steps, template_name, params_json, file1, file2):
+            try:
+                params = json.loads(params_json)
+            except Exception:
+                params = {}
+            step = {"template": template_name, "params": params,
+                    "file1": file1 or "", "file2": file2 or ""}
+            steps = list(steps) + [step]
+            return steps, steps
+
+        pipeline_add_btn.click(
+            fn=_add_pipeline_step,
+            inputs=[pipeline_steps_state, template_dropdown,
+                    params_json_box, file1_text, file2_text],
+            outputs=[pipeline_steps_state, pipeline_display],
+        )
+
+        pipeline_clear_btn.click(
+            fn=lambda: ([], []),
+            inputs=[],
+            outputs=[pipeline_steps_state, pipeline_display],
+        )
+
+        def _run_pipeline(steps, base_loc):
+            if not steps:
+                return ("<p style='color:orange'>No pipeline steps — add steps first.</p>",
+                        pd.DataFrame())
+            results = _pipe.run_pipeline(steps, base_loc, _TEMPLATES_DIR)
+            html = _pipe.pipeline_summary_html(results)
+            last_ok = next((r for r in reversed(results) if r["status"] == "ok"), None)
+            preview = last_ok["preview_df"] if last_ok else pd.DataFrame()
+            return html, preview
+
+        pipeline_run_btn.click(
+            fn=_run_pipeline,
+            inputs=[pipeline_steps_state, base_location_state],
+            outputs=[pipeline_status_html, pipeline_preview_df],
+        )
+
+        # ── History tab (Phase D) — HISTORY_TAB — uncomment to re-enable ──
+        # hist_refresh_btn.click(
+        #     fn=lambda: _hist.history_dataframe(),
+        #     inputs=[], outputs=[hist_table],
+        # )
+        # hist_clear_btn.click(
+        #     fn=lambda: (_hist.clear_history(), _hist.history_dataframe())[1],
+        #     inputs=[], outputs=[hist_table],
+        # )
+        # def _hist_load_detail(run_id):
+        #     if not run_id:
+        #         return "<p style='color:gray'>Enter a Run ID above.</p>", ""
+        #     run = _hist.get_run(int(run_id))
+        #     if not run:
+        #         return "<p style='color:red'>Run not found.</p>", ""
+        #     html = (
+        #         f"<div style='padding:8px 14px;background:#f8f9fa;"
+        #         f"border-left:4px solid #1a6e9e;border-radius:4px'>"
+        #         f"<b>ID {run['id']}</b> | {run['timestamp']} | "
+        #         f"{run['action']} | {run['display_name']} | "
+        #         f"<b>{run['status']}</b><br/>"
+        #         f"<small>{run['output_summary'][:200]}</small></div>"
+        #     )
+        #     return html, run.get("script_content", "")
+        # hist_id_box.change(
+        #     fn=_hist_load_detail,
+        #     inputs=[hist_id_box],
+        #     outputs=[hist_detail_html, hist_script_box],
+        # )
+        # def _hist_reload(run_id):
+        #     if not run_id:
+        #         return None, "{}", ""
+        #     run = _hist.get_run(int(run_id))
+        #     if not run:
+        #         return None, "{}", ""
+        #     return run["template_name"], run["params_json"], ""
+        # hist_load_btn.click(
+        #     fn=_hist_reload,
+        #     inputs=[hist_id_box],
+        #     outputs=[template_dropdown, params_json_box, where_box],
+        # )
+        # def _hist_dl(run_id):
+        #     if not run_id:
+        #         return None
+        #     run = _hist.get_run(int(run_id))
+        #     if not run or not run.get("script_content"):
+        #         return None
+        #     tmp = tempfile.mkdtemp(prefix="pplib_hist_")
+        #     path = os.path.join(tmp, run["script_name"])
+        #     Path(path).write_text(run["script_content"], encoding="utf-8")
+        #     return path
+        # hist_dl_btn.click(fn=_hist_dl, inputs=[hist_id_box], outputs=[hist_dl_file])
+        # def _hist_del(run_id):
+        #     if run_id:
+        #         _hist.delete_run(int(run_id))
+        #     return _hist.history_dataframe()
+        # hist_del_btn.click(fn=_hist_del, inputs=[hist_id_box], outputs=[hist_table])
+
+        # ── Startup load ──────────────────────────────────────────────────
         app.load(
             fn=lambda t: update_template_ui(t)[:3],
             inputs=[template_dropdown],
             outputs=[template_desc_html, params_json_box, param_help_html],
         )
 
-    # queue() — Gradio 4+ enables it by default; explicit call keeps concurrency
-    # cap on older versions. Guard against double-init on some Gradio builds.
     try:
         app.queue(default_concurrency_limit=4)
     except Exception:
@@ -1696,9 +2975,9 @@ def build_ui() -> gr.Blocks:
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Preprocessing Script Library — Gradio UI")
-    parser.add_argument("--port",  type=int, default=7861)
+    parser.add_argument("--port",  type=int, default=7868)
     parser.add_argument("--host",  type=str, default="127.0.0.1")
     parser.add_argument("--share", action="store_true")
     args = parser.parse_args()
     build_ui().launch(server_name=args.host, server_port=args.port, share=args.share,
-                      max_threads=40)
+                      max_threads=40, theme=gr.themes.Soft())
