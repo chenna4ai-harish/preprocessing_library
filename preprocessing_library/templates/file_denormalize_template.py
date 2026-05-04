@@ -111,14 +111,14 @@ def _load_zip(file_path: str, inner_name: str = "") -> pd.DataFrame:
             for name in names:
                 if os.path.basename(name).lower() == inner_name.lower():
                     with _tempfile.TemporaryDirectory() as tmp_dir:
-                        z.extract(name, tmp_dir)
-                        return _load_file(os.path.join(tmp_dir, name))
+                        extracted = z.extract(name, tmp_dir)
+                        return _load_file(extracted)
             raise ValueError(f"'{inner_name}' not found inside ZIP: {file_path}")
         for name in names:
             if _Path(name).suffix.lower() in _supported:
                 with _tempfile.TemporaryDirectory() as tmp_dir:
-                    z.extract(name, tmp_dir)
-                    return _load_file(os.path.join(tmp_dir, name))
+                    extracted = z.extract(name, tmp_dir)
+                    return _load_file(extracted)
     raise ValueError(f"No loadable file found inside ZIP: {file_path}")
 
 
