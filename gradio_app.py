@@ -80,13 +80,25 @@ _LARGE_FILE_BYTES = _LARGE_FILE_MB * 1_048_576
 _TEMPLATE_CATEGORIES: dict[str, list[str]] = {
     "All":            [],  # filled after TEMPLATE_CATALOG is defined
     "Combine Files":  ["file_union","file_join_two","file_join_multi",
-                       "file_join_multi_key","file_denormalize"],
+                       "file_join_multi_key","file_denormalize",
+                       "file_zip_extract_join"],
     "Clean Data":     ["file_deduplicate","file_rename_columns",
                        "file_handle_nulls","file_cast_types"],
     "Split / Filter": ["file_split_by_value","file_filter_to_files",
                        "file_split_columns","file_filter_by_values"],
     "Summarise":      ["file_aggregate","file_rank_filter","file_join_filter_agg"],
     "Track Changes":  ["file_delta_load"],
+    "ZIP Input":      ["file_zip_extract_join","file_join_two_zip","file_join_multi_key_zip",
+                       "file_denormalize_zip","file_delta_load_zip","file_join_filter_agg_zip"],
+}
+
+# Maps ZIP-variant catalog names → the real template file to use for generation
+_ZIP_TEMPLATE_ALIASES: dict[str, str] = {
+    "file_join_two_zip":        "file_join_two",
+    "file_join_multi_key_zip":  "file_join_multi_key",
+    "file_denormalize_zip":     "file_denormalize",
+    "file_delta_load_zip":      "file_delta_load",
+    "file_join_filter_agg_zip": "file_join_filter_agg",
 }
 
 # ---------------------------------------------------------------------------
@@ -133,14 +145,15 @@ _LOD_SCHEMAS: dict[str, dict] = {
 
 # Which list-of-dicts param each template uses (first one wins for the editor)
 _TEMPLATE_LOD_PARAM: dict[str, str] = {
-    "file_join_multi":      "JOIN_STEPS",
-    "file_filter_to_files": "FILTER_RULES",
-    "file_handle_nulls":    "NULL_RULES",
-    "file_cast_types":      "TYPE_RULES",
-    "file_filter_by_values":"VALUE_GROUPS",
-    "file_split_columns":   "COLUMN_GROUPS",
-    "file_aggregate":       "AGGREGATIONS",
-    "file_join_filter_agg": "AGGREGATIONS",
+    "file_join_multi":          "JOIN_STEPS",
+    "file_filter_to_files":     "FILTER_RULES",
+    "file_handle_nulls":        "NULL_RULES",
+    "file_cast_types":          "TYPE_RULES",
+    "file_filter_by_values":    "VALUE_GROUPS",
+    "file_split_columns":       "COLUMN_GROUPS",
+    "file_aggregate":           "AGGREGATIONS",
+    "file_join_filter_agg":     "AGGREGATIONS",
+    "file_join_filter_agg_zip": "AGGREGATIONS",
 }
 
 # WHERE condition operator choices  (Phase B3)
@@ -186,18 +199,24 @@ TEMPLATE_CATALOG: dict[str, dict] = {
         "function_sig": "preprocess(input_paths: list) -> str",
         "input_type":   "two",
         "parameters": [
-            {"name": "JOIN_KEY",        "type": "str", "default": "id",
-             "help": "Key column name (used for both files when LEFT_KEY / RIGHT_KEY are empty)."},
-            {"name": "LEFT_KEY",        "type": "str", "default": "",
-             "help": "Key column in the LEFT file. Leave blank to use JOIN_KEY. Use this when the two files have different column names for the same concept (e.g. 'customer_id' vs 'cust_num')."},
-            {"name": "RIGHT_KEY",       "type": "str", "default": "",
-             "help": "Key column in the RIGHT file. Leave blank to use JOIN_KEY."},
-            {"name": "JOIN_TYPE",       "type": "str", "default": "inner",      "help": "inner | left | right | outer"},
-            {"name": "LEFT_SUFFIX",     "type": "str", "default": "_left",      "help": "Suffix for overlapping columns from the left file."},
-            {"name": "RIGHT_SUFFIX",    "type": "str", "default": "_right",     "help": "Suffix for overlapping columns from the right file."},
-            {"name": "OUTPUT_DIR",      "type": "str", "default": "",           "help": "Directory to write the output file."},
-            {"name": "OUTPUT_FILENAME", "type": "str", "default": "joined.csv", "help": "Name of the output file."},
-            {"name": "OUTPUT_FORMAT",   "type": "str", "default": "csv",        "help": "csv | xlsx | json | parquet | tsv"},
+            {"name": "LEFT_USECOLS",      "type": "list", "default": "[]",       "help": "Columns to load from the left file. [] = all columns."},
+            {"name": "RIGHT_USECOLS",     "type": "list", "default": "[]",       "help": "Columns to load from the right file. [] = all columns."},
+            {"name": "LEFT_INNER_FILE",   "type": "str",  "default": "",         "help": "When the left input is a ZIP, extract this named file (e.g. customers.csv). \"\" = use the first supported file."},
+            {"name": "RIGHT_INNER_FILE",  "type": "str",  "default": "",         "help": "When the right input is a ZIP, extract this named file (e.g. invoices.csv). \"\" = use the first supported file."},
+            {"name": "DEDUP_RIGHT_BY",    "type": "str",  "default": "",         "help": "Deduplicate right file on this column before joining. \"\" = skip."},
+            {"name": "DEDUP_KEEP",        "type": "str",  "default": "first",    "help": "first | last — which duplicate row to keep."},
+            {"name": "JOIN_KEY",          "type": "str",  "default": "id",       "help": "Key column name (used for both files when LEFT_KEY / RIGHT_KEY are empty)."},
+            {"name": "LEFT_KEY",          "type": "str",  "default": "",         "help": "Key column in the LEFT file. Leave blank to use JOIN_KEY."},
+            {"name": "RIGHT_KEY",         "type": "str",  "default": "",         "help": "Key column in the RIGHT file. Leave blank to use JOIN_KEY."},
+            {"name": "JOIN_TYPE",         "type": "str",  "default": "inner",    "help": "inner | left | right | outer"},
+            {"name": "LEFT_SUFFIX",       "type": "str",  "default": "_left",    "help": "Suffix for overlapping columns from the left file."},
+            {"name": "RIGHT_SUFFIX",      "type": "str",  "default": "_right",   "help": "Suffix for overlapping columns from the right file."},
+            {"name": "OUTPUT_DROP_COLUMNS","type": "list", "default": "[]",      "help": "Columns to drop from merged result. [] = keep all."},
+            {"name": "INSERT_COLUMN",     "type": "str",  "default": "",         "help": "Reposition this column immediately after INSERT_AFTER_COLUMN. \"\" = skip."},
+            {"name": "INSERT_AFTER_COLUMN","type": "str", "default": "",         "help": "Anchor column for INSERT_COLUMN repositioning."},
+            {"name": "OUTPUT_DIR",        "type": "str",  "default": "",         "help": "Directory to write the output file."},
+            {"name": "OUTPUT_FILENAME",   "type": "str",  "default": "joined.csv","help": "Name of the output file."},
+            {"name": "OUTPUT_FORMAT",     "type": "str",  "default": "csv",      "help": "csv | xlsx | json | parquet | tsv"},
         ],
     },
 
@@ -222,18 +241,27 @@ TEMPLATE_CATALOG: dict[str, dict] = {
         "function_sig": "preprocess(input_paths: list) -> str",
         "input_type":   "two",
         "parameters": [
-            {"name": "JOIN_KEYS",       "type": "list", "default": '["id", "date"]',
-             "help": "Key column names shared by both files. Leave LEFT_KEYS/RIGHT_KEYS blank to use this for both sides."},
-            {"name": "LEFT_KEYS",       "type": "list", "default": '[]',
-             "help": "Key columns in the LEFT file. Leave empty to use JOIN_KEYS. Use when left and right files have different column names for the same concept."},
-            {"name": "RIGHT_KEYS",      "type": "list", "default": '[]',
-             "help": "Key columns in the RIGHT file. Leave empty to use JOIN_KEYS. Must have the same length as LEFT_KEYS when specified."},
-            {"name": "JOIN_TYPE",       "type": "str",  "default": "inner",              "help": "inner | left | right | outer"},
-            {"name": "LEFT_SUFFIX",     "type": "str",  "default": "_left",              "help": "Suffix for overlapping columns from the left file."},
-            {"name": "RIGHT_SUFFIX",    "type": "str",  "default": "_right",             "help": "Suffix for overlapping columns from the right file."},
-            {"name": "OUTPUT_DIR",      "type": "str",  "default": "",           "help": "Directory to write the output file."},
-            {"name": "OUTPUT_FILENAME", "type": "str",  "default": "multikey_join.csv",  "help": "Name of the output file."},
-            {"name": "OUTPUT_FORMAT",   "type": "str",  "default": "csv",                "help": "csv | xlsx | json | parquet | tsv"},
+            {"name": "LEFT_USECOLS",       "type": "list", "default": "[]",      "help": "Columns to load from the left file. [] = all columns."},
+            {"name": "RIGHT_USECOLS",      "type": "list", "default": "[]",      "help": "Columns to load from the right file. [] = all columns."},
+            {"name": "LEFT_INNER_FILE",    "type": "str",  "default": "",        "help": "When the left input is a ZIP, extract this named file (e.g. customers.csv). \"\" = use the first supported file."},
+            {"name": "RIGHT_INNER_FILE",   "type": "str",  "default": "",        "help": "When the right input is a ZIP, extract this named file (e.g. invoices.csv). \"\" = use the first supported file."},
+            {"name": "DEDUP_RIGHT_BY",     "type": "str",  "default": "",        "help": "Deduplicate right file on this column before joining. \"\" = skip."},
+            {"name": "DEDUP_KEEP",         "type": "str",  "default": "first",   "help": "first | last — which duplicate row to keep."},
+            {"name": "JOIN_KEYS",          "type": "list", "default": '["id", "date"]',
+             "help": "Key column names shared by both files. Leave LEFT_KEYS/RIGHT_KEYS empty to use this for both sides."},
+            {"name": "LEFT_KEYS",          "type": "list", "default": "[]",
+             "help": "Key columns in the LEFT file. Leave empty to use JOIN_KEYS."},
+            {"name": "RIGHT_KEYS",         "type": "list", "default": "[]",
+             "help": "Key columns in the RIGHT file. Leave empty to use JOIN_KEYS. Must be same length as LEFT_KEYS."},
+            {"name": "JOIN_TYPE",          "type": "str",  "default": "inner",          "help": "inner | left | right | outer"},
+            {"name": "LEFT_SUFFIX",        "type": "str",  "default": "_left",          "help": "Suffix for overlapping columns from the left file."},
+            {"name": "RIGHT_SUFFIX",       "type": "str",  "default": "_right",         "help": "Suffix for overlapping columns from the right file."},
+            {"name": "OUTPUT_DROP_COLUMNS","type": "list", "default": "[]",             "help": "Columns to drop from merged result. [] = keep all."},
+            {"name": "INSERT_COLUMN",      "type": "str",  "default": "",               "help": "Reposition this column immediately after INSERT_AFTER_COLUMN. \"\" = skip."},
+            {"name": "INSERT_AFTER_COLUMN","type": "str",  "default": "",               "help": "Anchor column for INSERT_COLUMN repositioning."},
+            {"name": "OUTPUT_DIR",         "type": "str",  "default": "",               "help": "Directory to write the output file."},
+            {"name": "OUTPUT_FILENAME",    "type": "str",  "default": "multikey_join.csv","help": "Name of the output file."},
+            {"name": "OUTPUT_FORMAT",      "type": "str",  "default": "csv",            "help": "csv | xlsx | json | parquet | tsv"},
         ],
     },
 
@@ -243,12 +271,25 @@ TEMPLATE_CATALOG: dict[str, dict] = {
         "function_sig": "preprocess(input_paths: list) -> str",
         "input_type":   "two",
         "parameters": [
-            {"name": "JOIN_KEY",        "type": "str", "default": "id",               "help": "Column shared by header and detail. ← pick from columns"},
-            {"name": "JOIN_TYPE",       "type": "str", "default": "left",             "help": "inner | left | right | outer"},
-            {"name": "DETAIL_PREFIX",   "type": "str", "default": "detail_",          "help": "Prefix added to every detail column (except the join key)."},
-            {"name": "OUTPUT_DIR",      "type": "str", "default": "",         "help": "Directory to write the output file."},
-            {"name": "OUTPUT_FILENAME", "type": "str", "default": "denormalized.csv", "help": "Name of the output file."},
-            {"name": "OUTPUT_FORMAT",   "type": "str", "default": "csv",              "help": "csv | xlsx | json | parquet | tsv"},
+            {"name": "LEFT_USECOLS",       "type": "list", "default": "[]",        "help": "Columns to load from the header file. [] = all columns."},
+            {"name": "RIGHT_USECOLS",      "type": "list", "default": "[]",        "help": "Columns to load from the detail file. [] = all columns."},
+            {"name": "LEFT_INNER_FILE",    "type": "str",  "default": "",          "help": "When the header input is a ZIP, extract this named file. \"\" = use the first supported file."},
+            {"name": "RIGHT_INNER_FILE",   "type": "str",  "default": "",          "help": "When the detail input is a ZIP, extract this named file. \"\" = use the first supported file."},
+            {"name": "DEDUP_RIGHT_BY",     "type": "str",  "default": "",          "help": "Deduplicate detail file on this column before joining. \"\" = skip."},
+            {"name": "DEDUP_KEEP",         "type": "str",  "default": "first",     "help": "first | last — which duplicate row to keep."},
+            {"name": "JOIN_KEY",           "type": "str",  "default": "id",        "help": "Shared join column name. Used when LEFT_KEY / RIGHT_KEY are empty. ← pick from columns"},
+            {"name": "LEFT_KEY",           "type": "str",  "default": "",          "help": "Join key in the header file when it differs from JOIN_KEY. \"\" = use JOIN_KEY."},
+            {"name": "RIGHT_KEY",          "type": "str",  "default": "",          "help": "Join key in the detail file when it differs from JOIN_KEY. \"\" = use JOIN_KEY."},
+            {"name": "JOIN_TYPE",          "type": "str",  "default": "left",      "help": "inner | left | right | outer"},
+            {"name": "LEFT_SUFFIX",        "type": "str",  "default": "_left",     "help": "Suffix for overlapping columns from the header file."},
+            {"name": "RIGHT_SUFFIX",       "type": "str",  "default": "_right",    "help": "Suffix for overlapping columns from the detail file."},
+            {"name": "DETAIL_PREFIX",      "type": "str",  "default": "detail_",   "help": "Prefix added to every detail column (except the join key)."},
+            {"name": "OUTPUT_DROP_COLUMNS","type": "list", "default": "[]",        "help": "Columns to drop from merged result. [] = keep all."},
+            {"name": "INSERT_COLUMN",      "type": "str",  "default": "",          "help": "Reposition this column immediately after INSERT_AFTER_COLUMN. \"\" = skip."},
+            {"name": "INSERT_AFTER_COLUMN","type": "str",  "default": "",          "help": "Anchor column for INSERT_COLUMN repositioning."},
+            {"name": "OUTPUT_DIR",         "type": "str",  "default": "",          "help": "Directory to write the output file."},
+            {"name": "OUTPUT_FILENAME",    "type": "str",  "default": "denormalized.csv","help": "Name of the output file."},
+            {"name": "OUTPUT_FORMAT",      "type": "str",  "default": "csv",       "help": "csv | xlsx | json | parquet | tsv"},
         ],
     },
 
@@ -384,21 +425,24 @@ TEMPLATE_CATALOG: dict[str, dict] = {
 
     "file_delta_load": {
         "display_name": "PS-15 — Delta Load (Change Detection)",
-        "description":  "Compare new vs old file; tag rows NEW / DELETED / CHANGED / UNCHANGED.",
+        "description":  "Compare new vs old file; tag rows NEW / CHANGED / DELETED.",
         "function_sig": "preprocess(input_paths: list) -> str",
         "input_type":   "two",
         "parameters": [
-            {"name": "KEY_COLUMNS",        "type": "list", "default": '["id"]',
-             "help": "Columns that uniquely identify a record. ← pick from columns"},
-            {"name": "COMPARE_COLUMNS",    "type": "list", "default": '[]',
-             "help": "Columns to check for changes. [] = compare all non-key columns."},
-            {"name": "DELTA_MODE",         "type": "str",  "default": "all",
-             "help": "all | new_only | deleted_only | changed_only | unchanged_only"},
-            {"name": "DELTA_STATUS_COLUMN","type": "str",  "default": "_delta",
-             "help": "Name of the status tag column added to output."},
-            {"name": "OUTPUT_DIR",         "type": "str",  "default": "",   "help": "Directory to write the output file."},
-            {"name": "OUTPUT_FILENAME",    "type": "str",  "default": "delta.csv",  "help": "Name of the output file."},
-            {"name": "OUTPUT_FORMAT",      "type": "str",  "default": "csv",        "help": "csv | xlsx | json | parquet | tsv"},
+            {"name": "LEFT_USECOLS",       "type": "list", "default": "[]",       "help": "Columns to load from the new (current) file. [] = all columns."},
+            {"name": "RIGHT_USECOLS",      "type": "list", "default": "[]",       "help": "Columns to load from the old (baseline) file. [] = all columns."},
+            {"name": "LEFT_INNER_FILE",    "type": "str",  "default": "",         "help": "When the new file input is a ZIP, extract this named file. \"\" = use the first supported file."},
+            {"name": "RIGHT_INNER_FILE",   "type": "str",  "default": "",         "help": "When the old file input is a ZIP, extract this named file. \"\" = use the first supported file."},
+            {"name": "KEY_COLUMNS",        "type": "list", "default": '["id"]',   "help": "Columns that uniquely identify a record. ← pick from columns"},
+            {"name": "COMPARE_COLUMNS",    "type": "list", "default": "[]",       "help": "Columns to check for changes. [] = compare all non-key columns."},
+            {"name": "DELTA_MODE",         "type": "str",  "default": "full_delta","help": "new_only | changed_only | full_delta (NEW + CHANGED + DELETED)"},
+            {"name": "DELTA_STATUS_COLUMN","type": "str",  "default": "Delta_Status","help": "Name of the status tag column added to output. Values: NEW | CHANGED | DELETED."},
+            {"name": "OUTPUT_DROP_COLUMNS","type": "list", "default": "[]",       "help": "Columns to drop from delta result. [] = keep all."},
+            {"name": "INSERT_COLUMN",      "type": "str",  "default": "",         "help": "Reposition this column immediately after INSERT_AFTER_COLUMN. \"\" = skip."},
+            {"name": "INSERT_AFTER_COLUMN","type": "str",  "default": "",         "help": "Anchor column for INSERT_COLUMN repositioning."},
+            {"name": "OUTPUT_DIR",         "type": "str",  "default": "",         "help": "Directory to write the output file."},
+            {"name": "OUTPUT_FILENAME",    "type": "str",  "default": "delta.csv","help": "Name of the output file."},
+            {"name": "OUTPUT_FORMAT",      "type": "str",  "default": "csv",      "help": "csv | xlsx | json | parquet | tsv"},
         ],
     },
 
@@ -447,31 +491,203 @@ TEMPLATE_CATALOG: dict[str, dict] = {
         "function_sig": "preprocess(input_paths: list) -> str",
         "input_type":   "two",
         "parameters": [
-            {"name": "JOIN_KEYS",        "type": "list", "default": '["id"]',
-             "help": "Column(s) to join on. ← pick from columns"},
-            {"name": "JOIN_TYPE",        "type": "str",  "default": "inner",
-             "help": "inner | left | right | outer"},
-            {"name": "WHERE_CONDITION",  "type": "str",  "default": "",
+            {"name": "LEFT_USECOLS",       "type": "list", "default": "[]",      "help": "Columns to load from the left file. [] = all columns."},
+            {"name": "RIGHT_USECOLS",      "type": "list", "default": "[]",      "help": "Columns to load from the right file. [] = all columns."},
+            {"name": "LEFT_INNER_FILE",    "type": "str",  "default": "",        "help": "When the left input is a ZIP, extract this named file (e.g. customers.csv). \"\" = use the first supported file."},
+            {"name": "RIGHT_INNER_FILE",   "type": "str",  "default": "",        "help": "When the right input is a ZIP, extract this named file (e.g. invoices.csv). \"\" = use the first supported file."},
+            {"name": "DEDUP_RIGHT_BY",     "type": "str",  "default": "",        "help": "Deduplicate right file on this column before joining. \"\" = skip."},
+            {"name": "DEDUP_KEEP",         "type": "str",  "default": "first",   "help": "first | last — which duplicate row to keep."},
+            {"name": "JOIN_KEYS",          "type": "list", "default": '["id"]',  "help": "Column(s) to join on. ← pick from columns"},
+            {"name": "JOIN_TYPE",          "type": "str",  "default": "inner",   "help": "inner | left | right | outer"},
+            {"name": "LEFT_SUFFIX",        "type": "str",  "default": "_left",   "help": "Suffix for overlapping columns from the left file."},
+            {"name": "RIGHT_SUFFIX",       "type": "str",  "default": "_right",  "help": "Suffix for overlapping columns from the right file."},
+            {"name": "WHERE_CONDITION",    "type": "str",  "default": "",
              "help": "pandas query() on joined result. Leave empty for no filter. e.g.  amount > 0 and status == 'ACTIVE'"},
-            {"name": "GROUP_BY_COLUMNS", "type": "list", "default": '["category"]',
+            {"name": "GROUP_BY_COLUMNS",   "type": "list", "default": '["category"]',
              "help": "Columns to group by after filtering. ← pick from columns"},
-            {"name": "AGGREGATIONS",     "type": "list_of_dicts",
+            {"name": "AGGREGATIONS",       "type": "list_of_dicts",
              "default": '[{"column": "*", "function": "count", "output_column": "_row_count"}]',
-             "help": 'Each: {"column":"col or *","function":"count|sum|mean|min|max|nunique|first|last|std","output_column":"name"}. Use "*" or "count" for row count.'},
-            {"name": "RANK_BY_COLUMN",   "type": "str",  "default": "",
+             "help": 'Each: {"column":"col or *","function":"count|sum|mean|min|max|nunique|first|last|std","output_column":"name"}. Use "*" for row count.'},
+            {"name": "RANK_BY_COLUMN",     "type": "str",  "default": "",
              "help": "Column in aggregated result to rank by. Leave empty to skip ranking. ← pick"},
-            {"name": "RANK_ORDER",       "type": "str",  "default": "desc",
-             "help": "asc (rank 1 = smallest) | desc (rank 1 = largest)"},
-            {"name": "RANK_COLUMN_NAME", "type": "str",  "default": "_rank",
-             "help": "Name of the rank column added to output."},
-            {"name": "KEEP_TOP_N",       "type": "int",  "default": "0",
-             "help": "Keep rows with rank <= N. 0 = keep all rows."},
-            {"name": "OUTPUT_DIR",       "type": "str",  "default": "",
-             "help": "Directory to write the output file."},
-            {"name": "OUTPUT_FILENAME",  "type": "str",  "default": "join_filter_agg.csv",
-             "help": "Name of the output file."},
-            {"name": "OUTPUT_FORMAT",    "type": "str",  "default": "csv",
-             "help": "csv | xlsx | json | parquet | tsv"},
+            {"name": "RANK_ORDER",         "type": "str",  "default": "desc",   "help": "asc (rank 1 = smallest) | desc (rank 1 = largest)"},
+            {"name": "RANK_COLUMN_NAME",   "type": "str",  "default": "_rank",  "help": "Name of the rank column added to output."},
+            {"name": "KEEP_TOP_N",         "type": "int",  "default": "0",      "help": "Keep rows with rank <= N. 0 = keep all rows."},
+            {"name": "OUTPUT_DROP_COLUMNS","type": "list", "default": "[]",     "help": "Columns to drop from result before writing. [] = keep all."},
+            {"name": "INSERT_COLUMN",      "type": "str",  "default": "",       "help": "Reposition this column immediately after INSERT_AFTER_COLUMN. \"\" = skip."},
+            {"name": "INSERT_AFTER_COLUMN","type": "str",  "default": "",       "help": "Anchor column for INSERT_COLUMN repositioning."},
+            {"name": "OUTPUT_DIR",         "type": "str",  "default": "",       "help": "Directory to write the output file."},
+            {"name": "OUTPUT_FILENAME",    "type": "str",  "default": "join_filter_agg.csv","help": "Name of the output file."},
+            {"name": "OUTPUT_FORMAT",      "type": "str",  "default": "csv",    "help": "csv | xlsx | json | parquet | tsv"},
+        ],
+    },
+    # ── ZIP Input Variants ──────────────────────────────────────────────────────
+    # These reuse the same template .py files (via _ZIP_TEMPLATE_ALIASES) but
+    # surface LEFT_INNER_FILE / RIGHT_INNER_FILE at the top of the params form.
+    "file_join_two_zip": {
+        "display_name": "Join Two ZIP Files",
+        "description":  "Extract one named file from each of two ZIPs, then join them on a key column.",
+        "function_sig": "preprocess(input_paths: list) -> str",
+        "input_type":   "two",
+        "parameters": [
+            {"name": "LEFT_INNER_FILE",    "type": "str",  "default": "",          "help": "File to extract from the Left ZIP (e.g. customers.csv). Required."},
+            {"name": "RIGHT_INNER_FILE",   "type": "str",  "default": "",          "help": "File to extract from the Right ZIP (e.g. invoices.csv). Required."},
+            {"name": "LEFT_USECOLS",       "type": "list", "default": "[]",        "help": "Columns to load from left file. [] = all."},
+            {"name": "RIGHT_USECOLS",      "type": "list", "default": "[]",        "help": "Columns to load from right file. [] = all."},
+            {"name": "DEDUP_RIGHT_BY",     "type": "str",  "default": "",          "help": "Dedup right on this column before join. \"\" = skip."},
+            {"name": "DEDUP_KEEP",         "type": "str",  "default": "first",     "help": "first | last"},
+            {"name": "JOIN_KEY",           "type": "str",  "default": "id",        "help": "Shared join column."},
+            {"name": "LEFT_KEY",           "type": "str",  "default": "",          "help": "Join column in left file. Leave blank to use JOIN_KEY."},
+            {"name": "RIGHT_KEY",          "type": "str",  "default": "",          "help": "Join column in right file. Leave blank to use JOIN_KEY."},
+            {"name": "JOIN_TYPE",          "type": "str",  "default": "inner",     "help": "inner | left | right | outer"},
+            {"name": "LEFT_SUFFIX",        "type": "str",  "default": "_left",     "help": "Suffix for overlapping left columns."},
+            {"name": "RIGHT_SUFFIX",       "type": "str",  "default": "_right",    "help": "Suffix for overlapping right columns."},
+            {"name": "OUTPUT_DROP_COLUMNS","type": "list", "default": "[]",        "help": "Columns to drop from result. [] = keep all."},
+            {"name": "INSERT_COLUMN",      "type": "str",  "default": "",          "help": "Reposition this column after INSERT_AFTER_COLUMN. \"\" = skip."},
+            {"name": "INSERT_AFTER_COLUMN","type": "str",  "default": "",          "help": "Anchor column for reordering."},
+            {"name": "OUTPUT_DIR",         "type": "str",  "default": "",          "help": "Directory to write the output file."},
+            {"name": "OUTPUT_FILENAME",    "type": "str",  "default": "joined.csv","help": "Name of the output file."},
+            {"name": "OUTPUT_FORMAT",      "type": "str",  "default": "csv",       "help": "csv | xlsx | json | parquet | tsv"},
+        ],
+    },
+
+    "file_join_multi_key_zip": {
+        "display_name": "Join Two ZIP Files (Multi-Key)",
+        "description":  "Extract one named file from each of two ZIPs, then join on multiple key columns.",
+        "function_sig": "preprocess(input_paths: list) -> str",
+        "input_type":   "two",
+        "parameters": [
+            {"name": "LEFT_INNER_FILE",    "type": "str",  "default": "",                 "help": "File to extract from the Left ZIP (e.g. customers.csv). Required."},
+            {"name": "RIGHT_INNER_FILE",   "type": "str",  "default": "",                 "help": "File to extract from the Right ZIP (e.g. invoices.csv). Required."},
+            {"name": "LEFT_USECOLS",       "type": "list", "default": "[]",               "help": "Columns to load from left file. [] = all."},
+            {"name": "RIGHT_USECOLS",      "type": "list", "default": "[]",               "help": "Columns to load from right file. [] = all."},
+            {"name": "DEDUP_RIGHT_BY",     "type": "str",  "default": "",                 "help": "Dedup right on this column before join. \"\" = skip."},
+            {"name": "DEDUP_KEEP",         "type": "str",  "default": "first",            "help": "first | last"},
+            {"name": "JOIN_KEYS",          "type": "list", "default": '["id", "date"]',   "help": "Shared key columns for both files."},
+            {"name": "LEFT_KEYS",          "type": "list", "default": "[]",               "help": "Key columns in left file. [] = use JOIN_KEYS."},
+            {"name": "RIGHT_KEYS",         "type": "list", "default": "[]",               "help": "Key columns in right file. [] = use JOIN_KEYS."},
+            {"name": "JOIN_TYPE",          "type": "str",  "default": "inner",            "help": "inner | left | right | outer"},
+            {"name": "LEFT_SUFFIX",        "type": "str",  "default": "_left",            "help": "Suffix for overlapping left columns."},
+            {"name": "RIGHT_SUFFIX",       "type": "str",  "default": "_right",           "help": "Suffix for overlapping right columns."},
+            {"name": "OUTPUT_DROP_COLUMNS","type": "list", "default": "[]",               "help": "Columns to drop from result. [] = keep all."},
+            {"name": "INSERT_COLUMN",      "type": "str",  "default": "",                 "help": "Reposition this column after INSERT_AFTER_COLUMN. \"\" = skip."},
+            {"name": "INSERT_AFTER_COLUMN","type": "str",  "default": "",                 "help": "Anchor column for reordering."},
+            {"name": "OUTPUT_DIR",         "type": "str",  "default": "",                 "help": "Directory to write the output file."},
+            {"name": "OUTPUT_FILENAME",    "type": "str",  "default": "multikey_join.csv","help": "Name of the output file."},
+            {"name": "OUTPUT_FORMAT",      "type": "str",  "default": "csv",              "help": "csv | xlsx | json | parquet | tsv"},
+        ],
+    },
+
+    "file_denormalize_zip": {
+        "display_name": "Denormalize ZIP Files (Header + Detail)",
+        "description":  "Extract a header file and detail file from two ZIPs, then flatten into a single wide file.",
+        "function_sig": "preprocess(input_paths: list) -> str",
+        "input_type":   "two",
+        "parameters": [
+            {"name": "LEFT_INNER_FILE",    "type": "str",  "default": "",               "help": "File to extract from the Header ZIP. Required."},
+            {"name": "RIGHT_INNER_FILE",   "type": "str",  "default": "",               "help": "File to extract from the Detail ZIP. Required."},
+            {"name": "LEFT_USECOLS",       "type": "list", "default": "[]",             "help": "Columns to load from header file. [] = all."},
+            {"name": "RIGHT_USECOLS",      "type": "list", "default": "[]",             "help": "Columns to load from detail file. [] = all."},
+            {"name": "DEDUP_RIGHT_BY",     "type": "str",  "default": "",               "help": "Dedup detail on this column before join. \"\" = skip."},
+            {"name": "DEDUP_KEEP",         "type": "str",  "default": "first",          "help": "first | last"},
+            {"name": "JOIN_KEY",           "type": "str",  "default": "id",             "help": "Shared join column."},
+            {"name": "LEFT_KEY",           "type": "str",  "default": "",               "help": "Join column in header file. Leave blank to use JOIN_KEY."},
+            {"name": "RIGHT_KEY",          "type": "str",  "default": "",               "help": "Join column in detail file. Leave blank to use JOIN_KEY."},
+            {"name": "JOIN_TYPE",          "type": "str",  "default": "left",           "help": "inner | left | right | outer"},
+            {"name": "LEFT_SUFFIX",        "type": "str",  "default": "_left",          "help": "Suffix for overlapping header columns."},
+            {"name": "RIGHT_SUFFIX",       "type": "str",  "default": "_right",         "help": "Suffix for overlapping detail columns."},
+            {"name": "DETAIL_PREFIX",      "type": "str",  "default": "detail_",        "help": "Prefix added to every detail column (except join key)."},
+            {"name": "OUTPUT_DROP_COLUMNS","type": "list", "default": "[]",             "help": "Columns to drop from result. [] = keep all."},
+            {"name": "INSERT_COLUMN",      "type": "str",  "default": "",               "help": "Reposition this column after INSERT_AFTER_COLUMN. \"\" = skip."},
+            {"name": "INSERT_AFTER_COLUMN","type": "str",  "default": "",               "help": "Anchor column for reordering."},
+            {"name": "OUTPUT_DIR",         "type": "str",  "default": "",               "help": "Directory to write the output file."},
+            {"name": "OUTPUT_FILENAME",    "type": "str",  "default": "denormalized.csv","help": "Name of the output file."},
+            {"name": "OUTPUT_FORMAT",      "type": "str",  "default": "csv",            "help": "csv | xlsx | json | parquet | tsv"},
+        ],
+    },
+
+    "file_delta_load_zip": {
+        "display_name": "Delta Load from ZIP Files",
+        "description":  "Extract current and baseline files from two ZIPs, then tag rows as NEW / CHANGED / DELETED.",
+        "function_sig": "preprocess(input_paths: list) -> str",
+        "input_type":   "two",
+        "parameters": [
+            {"name": "LEFT_INNER_FILE",    "type": "str",  "default": "",            "help": "File to extract from the New/Current ZIP. Required."},
+            {"name": "RIGHT_INNER_FILE",   "type": "str",  "default": "",            "help": "File to extract from the Old/Reference ZIP. Required."},
+            {"name": "LEFT_USECOLS",       "type": "list", "default": "[]",          "help": "Columns to load from new file. [] = all."},
+            {"name": "RIGHT_USECOLS",      "type": "list", "default": "[]",          "help": "Columns to load from old file. [] = all."},
+            {"name": "KEY_COLUMNS",        "type": "list", "default": '["id"]',      "help": "Columns that uniquely identify a record."},
+            {"name": "COMPARE_COLUMNS",    "type": "list", "default": "[]",          "help": "Columns to check for changes. [] = compare all non-key columns."},
+            {"name": "DELTA_MODE",         "type": "str",  "default": "full_delta",  "help": "new_only | changed_only | full_delta"},
+            {"name": "DELTA_STATUS_COLUMN","type": "str",  "default": "Delta_Status","help": "Name of the status tag column added to output."},
+            {"name": "OUTPUT_DROP_COLUMNS","type": "list", "default": "[]",          "help": "Columns to drop from result. [] = keep all."},
+            {"name": "INSERT_COLUMN",      "type": "str",  "default": "",            "help": "Reposition this column after INSERT_AFTER_COLUMN. \"\" = skip."},
+            {"name": "INSERT_AFTER_COLUMN","type": "str",  "default": "",            "help": "Anchor column for reordering."},
+            {"name": "OUTPUT_DIR",         "type": "str",  "default": "",            "help": "Directory to write the output file."},
+            {"name": "OUTPUT_FILENAME",    "type": "str",  "default": "delta.csv",   "help": "Name of the output file."},
+            {"name": "OUTPUT_FORMAT",      "type": "str",  "default": "csv",         "help": "csv | xlsx | json | parquet | tsv"},
+        ],
+    },
+
+    "file_join_filter_agg_zip": {
+        "display_name": "Join ZIP Files, Filter & Aggregate",
+        "description":  "Extract one file from each of two ZIPs, join them, apply WHERE filter, group-by aggregate, optional ranking.",
+        "function_sig": "preprocess(input_paths: list) -> str",
+        "input_type":   "two",
+        "parameters": [
+            {"name": "LEFT_INNER_FILE",    "type": "str",  "default": "",             "help": "File to extract from the Left ZIP. Required."},
+            {"name": "RIGHT_INNER_FILE",   "type": "str",  "default": "",             "help": "File to extract from the Right ZIP. Required."},
+            {"name": "LEFT_USECOLS",       "type": "list", "default": "[]",           "help": "Columns to load from left file. [] = all."},
+            {"name": "RIGHT_USECOLS",      "type": "list", "default": "[]",           "help": "Columns to load from right file. [] = all."},
+            {"name": "DEDUP_RIGHT_BY",     "type": "str",  "default": "",             "help": "Dedup right on this column before join. \"\" = skip."},
+            {"name": "DEDUP_KEEP",         "type": "str",  "default": "first",        "help": "first | last"},
+            {"name": "JOIN_KEYS",          "type": "list", "default": '["id"]',       "help": "Column(s) to join on."},
+            {"name": "JOIN_TYPE",          "type": "str",  "default": "inner",        "help": "inner | left | right | outer"},
+            {"name": "LEFT_SUFFIX",        "type": "str",  "default": "_left",        "help": "Suffix for overlapping left columns."},
+            {"name": "RIGHT_SUFFIX",       "type": "str",  "default": "_right",       "help": "Suffix for overlapping right columns."},
+            {"name": "WHERE_CONDITION",    "type": "str",  "default": "",             "help": "pandas query() on joined result. \"\" = no filter."},
+            {"name": "GROUP_BY_COLUMNS",   "type": "list", "default": '["category"]', "help": "Columns to group by."},
+            {"name": "AGGREGATIONS",       "type": "list_of_dicts",
+             "default": '[{"column": "*", "function": "count", "output_column": "_row_count"}]',
+             "help": 'Each: {"column":"col or *","function":"count|sum|mean|...","output_column":"name"}'},
+            {"name": "RANK_BY_COLUMN",     "type": "str",  "default": "",             "help": "Column to rank by. Leave empty to skip ranking."},
+            {"name": "RANK_ORDER",         "type": "str",  "default": "desc",         "help": "asc | desc"},
+            {"name": "RANK_COLUMN_NAME",   "type": "str",  "default": "_rank",        "help": "Name of the rank column."},
+            {"name": "KEEP_TOP_N",         "type": "int",  "default": "0",            "help": "Keep rows with rank <= N. 0 = keep all."},
+            {"name": "OUTPUT_DROP_COLUMNS","type": "list", "default": "[]",           "help": "Columns to drop from result. [] = keep all."},
+            {"name": "INSERT_COLUMN",      "type": "str",  "default": "",             "help": "Reposition this column after INSERT_AFTER_COLUMN. \"\" = skip."},
+            {"name": "INSERT_AFTER_COLUMN","type": "str",  "default": "",             "help": "Anchor column for reordering."},
+            {"name": "OUTPUT_DIR",         "type": "str",  "default": "",             "help": "Directory to write the output file."},
+            {"name": "OUTPUT_FILENAME",    "type": "str",  "default": "join_filter_agg.csv","help": "Name of the output file."},
+            {"name": "OUTPUT_FORMAT",      "type": "str",  "default": "csv",          "help": "csv | xlsx | json | parquet | tsv"},
+        ],
+    },
+
+    "file_zip_extract_join": {
+        "display_name": "ZIP Extract & Join",
+        "description":  "Extract two named files from a ZIP, join them, drop/reorder columns. All other ZIP contents can be passed through to the output directory.",
+        "function_sig": "preprocess(input_paths: list) -> list",
+        "input_type":   "single",
+        "parameters": [
+            {"name": "LEFT_FILE_IN_ZIP",    "type": "str",  "default": "filings.txt",           "help": "Filename of the primary (left) file inside the ZIP."},
+            {"name": "RIGHT_FILE_IN_ZIP",   "type": "str",  "default": "filingamendments.txt",  "help": "Filename of the secondary (right) file inside the ZIP."},
+            {"name": "SKIP_EXTENSIONS",     "type": "list", "default": "[\".sql\", \".rtf\"]",  "help": "File extensions to ignore inside the ZIP. [] = extract everything."},
+            {"name": "EXTRACT_OTHER_FILES", "type": "bool", "default": "True",                  "help": "If True, every other file in the ZIP (not LEFT, RIGHT, or skipped) is extracted to the output directory."},
+            {"name": "LEFT_USECOLS",        "type": "list", "default": "[]",                    "help": "Columns to load from the LEFT file. [] = all columns."},
+            {"name": "RIGHT_USECOLS",       "type": "list", "default": "[]",                    "help": "Columns to load from the RIGHT file. [] = all columns."},
+            {"name": "DEDUP_RIGHT_BY",      "type": "str",  "default": "",                      "help": "Deduplicate RIGHT file on this column before joining. \"\" = skip."},
+            {"name": "DEDUP_KEEP",          "type": "str",  "default": "first",                 "help": "first | last — which duplicate row to keep."},
+            {"name": "JOIN_KEY",            "type": "str",  "default": "FileNumber",            "help": "Shared join column name. Used when LEFT_KEY / RIGHT_KEY are empty."},
+            {"name": "LEFT_KEY",            "type": "str",  "default": "",                      "help": "Join column in the LEFT file when it differs from JOIN_KEY. \"\" = use JOIN_KEY."},
+            {"name": "RIGHT_KEY",           "type": "str",  "default": "",                      "help": "Join column in the RIGHT file when it differs from JOIN_KEY. \"\" = use JOIN_KEY."},
+            {"name": "JOIN_TYPE",           "type": "str",  "default": "left",                  "help": "left | inner | right | outer"},
+            {"name": "LEFT_SUFFIX",         "type": "str",  "default": "_left",                 "help": "Suffix for overlapping columns from the LEFT file."},
+            {"name": "RIGHT_SUFFIX",        "type": "str",  "default": "_right",                "help": "Suffix for overlapping columns from the RIGHT file."},
+            {"name": "OUTPUT_DROP_COLUMNS", "type": "list", "default": "[]",                    "help": "Columns to drop from merged result. [] = keep all."},
+            {"name": "INSERT_COLUMN",       "type": "str",  "default": "",                      "help": "Reposition this column immediately after INSERT_AFTER_COLUMN. \"\" = skip."},
+            {"name": "INSERT_AFTER_COLUMN", "type": "str",  "default": "",                      "help": "Anchor column for INSERT_COLUMN repositioning."},
+            {"name": "OUTPUT_FILENAME",     "type": "str",  "default": "filings_processed.txt", "help": "Filename for the merged output file."},
+            {"name": "OUTPUT_DIR",          "type": "str",  "default": "",                      "help": "Directory to write all output files. \"\" = same directory as the input ZIP."},
         ],
     },
 }
@@ -506,21 +722,39 @@ _INPUT_FILE_CONFIG: dict[str, list[dict]] = {
     "file_aggregate":       [{"label": "Input File",                   "key": "input_path"}],
     "file_delta_load":      [{"label": "New File (current data)",      "key": "new_path"},
                              {"label": "Old / Reference File",         "key": "old_path"}],
-    "file_rank_filter":     [{"label": "Input File",                   "key": "input_path"}],
-    "file_filter_by_values":[{"label": "Input File",                   "key": "input_path"}],
-    "file_join_filter_agg": [{"label": "Left File",                    "key": "left_path"},
-                              {"label": "Right File",                   "key": "right_path"}],
+    "file_rank_filter":       [{"label": "Input File",                   "key": "input_path"}],
+    "file_filter_by_values":  [{"label": "Input File",                   "key": "input_path"}],
+    "file_join_filter_agg":   [{"label": "Left File",                    "key": "left_path"},
+                                {"label": "Right File",                   "key": "right_path"}],
+    "file_zip_extract_join":   [{"label": "ZIP File (comma-separated if multiple)", "key": "input_paths", "multi": True}],
+    # ZIP variants — same slot structure as their originals
+    "file_join_two_zip":        [{"label": "Left ZIP File",               "key": "left_path"},
+                                 {"label": "Right ZIP File",              "key": "right_path"}],
+    "file_join_multi_key_zip":  [{"label": "Left ZIP File",               "key": "left_path"},
+                                 {"label": "Right ZIP File",              "key": "right_path"}],
+    "file_denormalize_zip":     [{"label": "Header ZIP File",             "key": "header_path"},
+                                 {"label": "Detail ZIP File",             "key": "detail_path"}],
+    "file_delta_load_zip":      [{"label": "New ZIP File (current data)", "key": "new_path"},
+                                 {"label": "Old ZIP File (reference)",    "key": "old_path"}],
+    "file_join_filter_agg_zip": [{"label": "Left ZIP File",               "key": "left_path"},
+                                 {"label": "Right ZIP File",              "key": "right_path"}],
 }
 _MAX_FILE_SLOTS = 2   # maximum file inputs shown (single uses slot 1 only)
 
 # Maps 2-file template names → (placeholder_for_file1, placeholder_for_file2)
 # These are auto-injected from the UI file selectors — NOT shown in the params JSON.
 _TWO_FILE_PLACEHOLDERS: dict[str, tuple[str, str]] = {
-    "file_join_two":        ("LEFT_FILENAME",   "RIGHT_FILENAME"),
-    "file_join_multi_key":  ("LEFT_FILENAME",   "RIGHT_FILENAME"),
-    "file_denormalize":     ("HEADER_FILENAME", "DETAIL_FILENAME"),
-    "file_delta_load":      ("NEW_FILENAME",    "OLD_FILENAME"),
-    "file_join_filter_agg": ("LEFT_FILENAME",   "RIGHT_FILENAME"),
+    "file_join_two":            ("LEFT_FILENAME",   "RIGHT_FILENAME"),
+    "file_join_multi_key":      ("LEFT_FILENAME",   "RIGHT_FILENAME"),
+    "file_denormalize":         ("HEADER_FILENAME", "DETAIL_FILENAME"),
+    "file_delta_load":          ("NEW_FILENAME",    "OLD_FILENAME"),
+    "file_join_filter_agg":     ("LEFT_FILENAME",   "RIGHT_FILENAME"),
+    # ZIP variants reuse the same placeholders
+    "file_join_two_zip":        ("LEFT_FILENAME",   "RIGHT_FILENAME"),
+    "file_join_multi_key_zip":  ("LEFT_FILENAME",   "RIGHT_FILENAME"),
+    "file_denormalize_zip":     ("HEADER_FILENAME", "DETAIL_FILENAME"),
+    "file_delta_load_zip":      ("NEW_FILENAME",    "OLD_FILENAME"),
+    "file_join_filter_agg_zip": ("LEFT_FILENAME",   "RIGHT_FILENAME"),
 }
 
 
@@ -631,6 +865,75 @@ def _sniff_load_zip(file_path: str, max_rows: int) -> pd.DataFrame:
     return pd.DataFrame({"error": ["No loadable file found in ZIP"]})
 
 
+_ZIP_LOADABLE_EXTS  = {".csv", ".tsv", ".txt", ".xlsx", ".xls", ".json", ".xml"}
+_ZIP_SKIP_EXTS      = {".sql", ".rtf", ".exe", ".bat", ".sh", ".dll", ".so", ".py", ".zip"}
+
+
+def _scan_zip_contents(fpath: Path) -> list[dict]:
+    """
+    Open a ZIP and return one result-dict per inner file.
+    Each dict matches the _scan_one_file() shape plus:
+        is_zip_entry : True
+        inner_name   : bare filename inside the ZIP  (e.g. "filings.txt")
+        zip_name     : ZIP filename                  (e.g. "test_batch.zip")
+    'path' always points to the ZIP file (what preprocess() receives).
+    'name' is the display label "zipname → innerfile".
+    """
+    results: list[dict] = []
+    zip_name = fpath.name
+    zip_path = str(fpath)
+
+    def _make_entry(inner_name, inner_ext, status, rows, cols, columns, preview, error=""):
+        return {
+            "name":         f"{zip_name} → {inner_name}",
+            "path":         zip_path,
+            "ext":          inner_ext or "(none)",
+            "rows":         rows,
+            "cols":         cols,
+            "columns":      columns,
+            "preview":      preview,
+            "status":       status,
+            "error":        error,
+            "large":        False,
+            "is_zip_entry": True,
+            "inner_name":   inner_name,
+            "zip_name":     zip_name,
+        }
+
+    try:
+        with zipfile.ZipFile(zip_path, "r") as z:
+            inner_names = [
+                n for n in z.namelist()
+                if not n.endswith("/")
+                and not Path(n).name.startswith(".")
+                and Path(n).suffix.lower() not in _ZIP_SKIP_EXTS
+            ]
+            for inner_path in inner_names:
+                bare      = Path(inner_path).name
+                inner_ext = Path(inner_path).suffix.lower()
+
+                if inner_ext not in _ZIP_LOADABLE_EXTS:
+                    results.append(_make_entry(bare, inner_ext, "📦", "—", "—", [], {}))
+                    continue
+
+                try:
+                    with tempfile.TemporaryDirectory() as tmp_dir:
+                        z.extract(inner_path, tmp_dir)
+                        extracted = os.path.join(tmp_dir, inner_path)
+                        df      = _sniff_load(extracted, max_rows=10)
+                        ncol    = len(df.columns)
+                        cols    = [str(c) for c in df.columns.tolist()]
+                        nrow    = _count_rows_fast(extracted, df)
+                        preview = df.head(10).astype(str).to_dict(orient="split")
+                    results.append(_make_entry(bare, inner_ext, "✅", nrow, ncol, cols, preview))
+                except Exception as exc:
+                    results.append(_make_entry(bare, inner_ext, "⚠️", 0, 0, [], {}, str(exc)))
+    except Exception as exc:
+        results.append(_make_entry(zip_name, ".zip", "⚠️", 0, 0, [], {}, f"Cannot open ZIP: {exc}"))
+
+    return results
+
+
 _MAX_FOLDER_FILES = 10   # hard limit on files per folder scan
 
 # ---------------------------------------------------------------------------
@@ -738,57 +1041,123 @@ def scan_folder(folder_path: str):
     if cache_key in _scan_cache:
         return _make_scan_result(_scan_cache[cache_key])
 
-    # ── Parallel scan ────────────────────────────────────────────────────────
-    results_by_name: dict[str, dict] = {}
-    with ThreadPoolExecutor(max_workers=min(len(all_files), 6)) as pool:
-        future_map = {pool.submit(_scan_one_file, fpath): fpath for fpath in all_files}
-        for future in as_completed(future_map):
-            r = future.result()
-            results_by_name[r["name"]] = r
+    # ── Parallel scan (non-ZIP files only) ───────────────────────────────────
+    non_zip_files = [p for p in all_files if p.suffix.lower() != ".zip"]
+    zip_files     = [p for p in all_files if p.suffix.lower() == ".zip"]
 
-    # Restore original sort order (as_completed returns in completion order)
-    ordered = [results_by_name[fpath.name] for fpath in all_files if fpath.name in results_by_name]
+    results_by_name: dict[str, dict] = {}
+    if non_zip_files:
+        with ThreadPoolExecutor(max_workers=min(len(non_zip_files), 6)) as pool:
+            future_map = {pool.submit(_scan_one_file, fpath): fpath for fpath in non_zip_files}
+            for future in as_completed(future_map):
+                r = future.result()
+                results_by_name[r["name"]] = r
+
+    # ── Expand ZIP contents (parallel across ZIPs) ────────────────────────────
+    zip_inner_results: dict[str, list[dict]] = {}   # zip_name → list of inner dicts
+    if zip_files:
+        with ThreadPoolExecutor(max_workers=min(len(zip_files), 4)) as pool:
+            future_map = {pool.submit(_scan_zip_contents, fpath): fpath for fpath in zip_files}
+            for future in as_completed(future_map):
+                inner_list = future.result()
+                if inner_list:
+                    zip_name = inner_list[0]["zip_name"]
+                    zip_inner_results[zip_name] = inner_list
+
+    # ── Build ordered display list ────────────────────────────────────────────
+    # Non-ZIP files in original sort order, then expand each ZIP in sort order
+    display_entries: list[dict] = []
+    for fpath in all_files:
+        if fpath.suffix.lower() == ".zip":
+            display_entries.extend(zip_inner_results.get(fpath.name, []))
+        elif fpath.name in results_by_name:
+            display_entries.append(results_by_name[fpath.name])
 
     file_data: dict[str, dict] = {}
     rows_html = ""
     all_columns: dict[str, list[str]] = {}
-    filename_choices = ["(none)"]
+    filename_choices = ["(none)"]          # Tab-2 dropdown: ZIP names + regular filenames
+    tab1_selector_choices: list[str] = []  # Tab-1 radio: expanded inner names + regular filenames
 
-    for r in ordered:
+    # Track which ZIP names we've already added to filename_choices
+    _zip_names_added: set[str] = set()
+
+    for r in display_entries:
         name     = r["name"]
         ext      = r["ext"]
         nrow     = r["rows"]
         ncol     = r["cols"]
         cols     = r["columns"]
-        cols_all = ", ".join(cols)
         status   = r["status"]
+        is_zip   = r.get("is_zip_entry", False)
+        zip_name = r.get("zip_name", "")
 
+        # Store in file_data for show_file_detail
         file_data[name] = {
-            "path":    r["path"],
-            "ext":     ext,
-            "rows":    nrow,
-            "cols":    ncol,
-            "columns": cols,
-            "preview": r["preview"],
+            "path":         r["path"],
+            "ext":          ext,
+            "rows":         nrow,
+            "cols":         ncol,
+            "columns":      cols,
+            "preview":      r["preview"],
+            "is_zip_entry": is_zip,
+            "inner_name":   r.get("inner_name", ""),
+            "zip_name":     zip_name,
         }
+
         if cols:
             all_columns[name] = cols
-        filename_choices.append(name)
+
+        # Tab-1 selector: always show expanded inner names
+        tab1_selector_choices.append(name)
+
+        # Tab-2 filename dropdown: show the ZIP filename once (not inner names)
+        if is_zip:
+            if zip_name not in _zip_names_added:
+                filename_choices.append(zip_name)
+                _zip_names_added.add(zip_name)
+        else:
+            filename_choices.append(name)
+
+        # HTML table row
+        nrow_display = f"{nrow:,}" if isinstance(nrow, int) and nrow >= 0 else str(nrow)
+        ncol_display = str(ncol) if isinstance(ncol, int) else str(ncol)
+        cols_all     = ", ".join(cols)
+        if is_zip:
+            # Indented inner-file row with ZIP chain indicator
+            name_cell = (
+                f"<span style='color:#aaa;font-size:0.8em'>📦 {zip_name}</span> "
+                f"<span style='color:#888'>›</span> "
+                f"<b style='color:#1a6e9e'>{r['inner_name']}</b>"
+            )
+            row_bg = "background:#f9fbff"
+        else:
+            name_cell = f"<b>{name}</b>"
+            row_bg    = ""
+
         rows_html += (
-            f"<tr style='vertical-align:top'>"
+            f"<tr style='vertical-align:top;{row_bg}'>"
             f"<td style='padding:6px 12px'>{status}</td>"
-            f"<td style='padding:6px 12px;white-space:nowrap'><b>{name}</b></td>"
+            f"<td style='padding:6px 12px;white-space:nowrap'>{name_cell}</td>"
             f"<td style='padding:6px 12px'>{ext}</td>"
-            f"<td style='padding:6px 12px'>{nrow:,}</td>"
-            f"<td style='padding:6px 12px'>{ncol}</td>"
+            f"<td style='padding:6px 12px'>{nrow_display}</td>"
+            f"<td style='padding:6px 12px'>{ncol_display}</td>"
             f"<td style='padding:6px 12px;color:#333;font-size:0.85em'>{cols_all}</td>"
             f"</tr>"
         )
 
-    total = len(all_files)
+    total      = len(all_files)
+    n_zip      = len(zip_files)
+    n_expanded = sum(len(v) for v in zip_inner_results.values())
+    zip_note   = (
+        f" &nbsp;<span style='color:#1a6e9e;font-size:0.88em'>"
+        f"({n_zip} ZIP{'s' if n_zip>1 else ''}, {n_expanded} inner file{'s' if n_expanded!=1 else ''} expanded)"
+        f"</span>"
+    ) if n_zip else ""
+
     summary_html = (
         f"<div style='margin-bottom:8px;color:#555'>📂 <b>{folder_path}</b> &nbsp;—&nbsp; "
-        f"{total} file(s) found</div>"
+        f"{total} file(s) found{zip_note}</div>"
         "<table style='border-collapse:collapse;width:100%'>"
         "<thead><tr style='background:#f0f0f0'>"
         "<th style='padding:6px 12px'></th>"
@@ -822,27 +1191,26 @@ def scan_folder(folder_path: str):
         else "<p style='color:gray'>No columns detected.</p>"
     )
 
-    filenames = list(file_data.keys())
     # Cache raw data only — gr.update() objects are single-use Gradio descriptors
     # and must be freshly created on every return.
     _scan_cache[cache_key] = {
-        "summary_html":      summary_html,
-        "filenames":         filenames,
-        "file_data_json":    json.dumps(file_data),
-        "cols_info_html":    cols_info_html,
-        "filename_choices":  filename_choices,
-        "base_location":     str(folder),
+        "summary_html":         summary_html,
+        "tab1_choices":         tab1_selector_choices,
+        "file_data_json":       json.dumps(file_data),
+        "cols_info_html":       cols_info_html,
+        "filename_choices":     filename_choices,
+        "base_location":        str(folder),
     }
     return _make_scan_result(_scan_cache[cache_key])
 
 
 def _make_scan_result(cached: dict) -> tuple:
     """Reconstruct the scan return tuple from cached raw data (fresh gr.update() each time)."""
-    filenames        = cached["filenames"]
+    tab1_choices     = cached["tab1_choices"]
     filename_choices = cached["filename_choices"]
     return (
         cached["summary_html"],
-        gr.update(choices=filenames, value=filenames[0] if filenames else None),
+        gr.update(choices=tab1_choices, value=tab1_choices[0] if tab1_choices else None),
         cached["file_data_json"],
         cached["cols_info_html"],
         gr.update(choices=filename_choices, value="(none)"),
@@ -877,11 +1245,12 @@ def show_file_detail(selected_name: str, file_data_json: str, selected_sheet: st
 
     file_path = entry["path"]
     ext = entry.get("ext", "").lower()
+    is_zip_entry = entry.get("is_zip_entry", False)
 
-    # Sheet picker — detect sheets for Excel files
+    # Sheet picker — only for direct Excel files (not ZIP inner files)
     sheet_names: list[str] = []
     sheet_picker_update = gr.update(choices=[], visible=False, value=None)
-    if ext in (".xlsx", ".xls"):
+    if not is_zip_entry and ext in (".xlsx", ".xls"):
         try:
             xf = pd.ExcelFile(file_path)
             sheet_names = xf.sheet_names
@@ -893,9 +1262,14 @@ def show_file_detail(selected_name: str, file_data_json: str, selected_sheet: st
         except Exception:
             pass
 
-    # Load data — use cached preview unless a specific sheet is requested
+    # Load data
     df: pd.DataFrame = pd.DataFrame()
-    if ext in (".xlsx", ".xls") and selected_sheet and sheet_names:
+    if is_zip_entry:
+        # Always use the cached preview — file_path points to the ZIP, not the inner file
+        preview = entry.get("preview")
+        if preview and preview.get("data") and preview.get("columns"):
+            df = pd.DataFrame(preview["data"], columns=preview["columns"])
+    elif ext in (".xlsx", ".xls") and selected_sheet and sheet_names:
         try:
             df = pd.read_excel(file_path, sheet_name=selected_sheet, nrows=10)
         except Exception:
@@ -1077,6 +1451,33 @@ def _append_col_to_list(col_val: str, param_key: str, current_json: str) -> str:
         existing.append(col_val)
         d[param_key] = existing
     return json.dumps(d, indent=2)
+
+
+def _get_zip_inner_files(zip_name: str, file_data_json: str) -> list[str]:
+    """Return sorted inner file names for a given ZIP from the scanned file_data_state."""
+    try:
+        file_data = json.loads(file_data_json)
+    except Exception:
+        return []
+    inner_files: list[str] = []
+    for entry in file_data.values():
+        if entry.get("is_zip_entry") and entry.get("zip_name") == zip_name:
+            inner = entry.get("inner_name", "")
+            if inner and inner not in inner_files:
+                inner_files.append(inner)
+    return sorted(inner_files)
+
+
+def _set_inner_file_param(inner_file: str, param_key: str, params_json: str) -> str:
+    """Write LEFT_INNER_FILE or RIGHT_INNER_FILE into the params JSON box."""
+    if not inner_file or not params_json:
+        return params_json
+    try:
+        d = json.loads(params_json)
+        d[param_key] = inner_file
+        return json.dumps(d, indent=2)
+    except Exception:
+        return params_json
 
 
 def _auto_fill_output_params(
@@ -1311,10 +1712,13 @@ def generate_script(
     elif not safe_name.endswith(".py"):
         safe_name += ".py"
 
+    # Resolve ZIP variant → actual template file
+    actual_template_name = _ZIP_TEMPLATE_ALIASES.get(template_name, template_name)
+
     with tempfile.TemporaryDirectory() as tmp_dir:
         try:
             generated_path = generate_preprocessor(
-                template_name=template_name,
+                template_name=actual_template_name,
                 parameters=gen_params,
                 output_script_name=safe_name,
                 output_dir=tmp_dir,
@@ -1333,6 +1737,7 @@ def generate_script(
             return f"<p style='color:red'><b>WHERE injection failed:</b> {exc}</p>", "", None
 
     # Append __main__ block (uses base_location + filenames)
+    # Use template_name (catalog key) so _INPUT_FILE_CONFIG returns the right labels
     script_content += _build_main_block(
         template_name, base_location or "", file1_val or "", file2_val or ""
     )
@@ -1415,10 +1820,13 @@ def run_script(
     if not safe_name.endswith(".py"):
         safe_name += ".py"
 
+    # Resolve ZIP variant → actual template file
+    actual_template_name = _ZIP_TEMPLATE_ALIASES.get(template_name, template_name)
+
     with tempfile.TemporaryDirectory() as tmp_gen:
         try:
             gpath = generate_preprocessor(
-                template_name, gen_params, safe_name, tmp_gen, _TEMPLATES_DIR,
+                actual_template_name, gen_params, safe_name, tmp_gen, _TEMPLATES_DIR,
             )
             script_content = Path(gpath).read_text(encoding="utf-8")
         except Exception as exc:
@@ -1509,16 +1917,20 @@ def run_script(
         ) + EMPTY[1:]
 
     # ── 5. Collect output files ───────────────────────────────────────────
-    result_path = Path(str(result))
-    if result_path.is_file():
-        output_files = [result_path]
-    elif result_path.is_dir():
-        output_files = sorted(
-            f for f in result_path.iterdir()
-            if f.is_file() and not f.name.startswith(".")
-        )
+    # preprocess() may return: str path, list[str], or tuple[str]
+    if isinstance(result, (list, tuple)):
+        output_files = [Path(str(p)) for p in result if Path(str(p)).is_file()]
     else:
-        output_files = []
+        result_path = Path(str(result))
+        if result_path.is_file():
+            output_files = [result_path]
+        elif result_path.is_dir():
+            output_files = sorted(
+                f for f in result_path.iterdir()
+                if f.is_file() and not f.name.startswith(".")
+            )
+        else:
+            output_files = []
 
     if not output_files:
         return (
@@ -1751,7 +2163,9 @@ def _preview_output_columns(
     # Template-specific estimation
     out_cols: list[str] = []
     if template_name in ("file_join_two", "file_join_multi_key", "file_denormalize",
-                         "file_join_filter_agg"):
+                         "file_join_filter_agg",
+                         "file_join_two_zip", "file_join_multi_key_zip",
+                         "file_denormalize_zip", "file_join_filter_agg_zip"):
         out_cols = list(all_cols)  # simplified: union of all scanned cols
     elif template_name == "file_aggregate":
         gb = params.get("GROUP_BY_COLUMNS", [])
@@ -2010,6 +2424,20 @@ def build_ui() -> gr.Blocks:
                         interactive=True, scale=3,
                     )
 
+                # ZIP inner file selectors — visible only when the selected file is a ZIP
+                with gr.Row(visible=False) as zip1_inner_row:
+                    zip1_inner_dropdown = gr.Dropdown(
+                        label="Inner file in Left ZIP — sets LEFT_INNER_FILE",
+                        choices=[], value=None, interactive=True, scale=3,
+                        info="Pick which file inside the ZIP to use as the left input.",
+                    )
+                with gr.Row(visible=False) as zip2_inner_row:
+                    zip2_inner_dropdown = gr.Dropdown(
+                        label="Inner file in Right ZIP — sets RIGHT_INNER_FILE",
+                        choices=[], value=None, interactive=True, scale=3,
+                        info="Pick which file inside the ZIP to use as the right input.",
+                    )
+
                 # WHERE condition (Phase B3)
                 gr.Markdown("### WHERE Condition (optional pre-filter)")
                 with gr.Row():
@@ -2165,7 +2593,6 @@ def build_ui() -> gr.Blocks:
         def _scan_and_update(folder_path, template_name, file1_val, params_json):
             status, sel_upd, fdata, cols_html, fn_upd, base_loc = scan_folder(folder_path)
             new_params = _auto_fill_output_params(params_json, template_name, file1_val, base_loc)
-            # Populate WHERE builder column dropdowns
             try:
                 all_cols = _get_all_columns(fdata)
             except Exception:
@@ -2179,6 +2606,8 @@ def build_ui() -> gr.Blocks:
                 gr.update(choices=col_choices, value="(none)"),
                 gr.update(choices=col_choices, value="(none)"),
                 gr.update(choices=col_choices, value="(none)"),
+                gr.update(visible=False),  # hide zip1_inner_row
+                gr.update(visible=False),  # hide zip2_inner_row
             )
 
         scan_btn.click(
@@ -2188,7 +2617,8 @@ def build_ui() -> gr.Blocks:
                      file1_dropdown, file2_dropdown,
                      base_location_state, params_json_box,
                      step_html, step_state,
-                     wc1, wc2, wc3],
+                     wc1, wc2, wc3,
+                     zip1_inner_row, zip2_inner_row],
         )
 
         # ── File selection in Tab 1 ───────────────────────────────────────
@@ -2206,21 +2636,56 @@ def build_ui() -> gr.Blocks:
                      sheet_picker, profile_accordion],
         )
 
-        # ── File name dropdowns → text boxes ─────────────────────────────
-        def _pick_and_autofill(dropdown_val, params_json, template_name, base_loc):
+        # ── File name dropdowns → text boxes + ZIP inner file selectors ──────
+        def _pick_and_autofill(dropdown_val, params_json, template_name, base_loc,
+                               file_data_json):
             fname = dropdown_val if dropdown_val and dropdown_val != "(none)" else ""
             new_params = _auto_fill_output_params(params_json, template_name, fname, base_loc)
-            return fname, new_params
+            is_zip = fname.lower().endswith(".zip") if fname else False
+            if is_zip:
+                inner_files = _get_zip_inner_files(fname, file_data_json)
+                zip_row_upd = gr.update(visible=True)
+                zip_dd_upd  = gr.update(choices=inner_files, value=None)
+            else:
+                zip_row_upd = gr.update(visible=False)
+                zip_dd_upd  = gr.update(choices=[], value=None)
+            return fname, new_params, zip_row_upd, zip_dd_upd
 
-        def _pick_filename(dropdown_val):
-            return "" if not dropdown_val or dropdown_val == "(none)" else dropdown_val
+        def _pick_file2_with_zip(dropdown_val, file_data_json):
+            fname = dropdown_val if dropdown_val and dropdown_val != "(none)" else ""
+            is_zip = fname.lower().endswith(".zip") if fname else False
+            if is_zip:
+                inner_files = _get_zip_inner_files(fname, file_data_json)
+                zip_row_upd = gr.update(visible=True)
+                zip_dd_upd  = gr.update(choices=inner_files, value=None)
+            else:
+                zip_row_upd = gr.update(visible=False)
+                zip_dd_upd  = gr.update(choices=[], value=None)
+            return fname, zip_row_upd, zip_dd_upd
 
         file1_dropdown.change(
             fn=_pick_and_autofill,
-            inputs=[file1_dropdown, params_json_box, template_dropdown, base_location_state],
-            outputs=[file1_text, params_json_box],
+            inputs=[file1_dropdown, params_json_box, template_dropdown,
+                    base_location_state, file_data_state],
+            outputs=[file1_text, params_json_box, zip1_inner_row, zip1_inner_dropdown],
         )
-        file2_dropdown.change(fn=_pick_filename, inputs=[file2_dropdown], outputs=[file2_text])
+        file2_dropdown.change(
+            fn=_pick_file2_with_zip,
+            inputs=[file2_dropdown, file_data_state],
+            outputs=[file2_text, zip2_inner_row, zip2_inner_dropdown],
+        )
+
+        # When user picks an inner file, inject it into the params JSON
+        zip1_inner_dropdown.change(
+            fn=lambda v, p: _set_inner_file_param(v, "LEFT_INNER_FILE", p),
+            inputs=[zip1_inner_dropdown, params_json_box],
+            outputs=[params_json_box],
+        )
+        zip2_inner_dropdown.change(
+            fn=lambda v, p: _set_inner_file_param(v, "RIGHT_INNER_FILE", p),
+            inputs=[zip2_inner_dropdown, params_json_box],
+            outputs=[params_json_box],
+        )
 
         # ── Category filter (B1) ─────────────────────────────────────────
         category_radio.change(
@@ -2256,6 +2721,7 @@ def build_ui() -> gr.Blocks:
                 gr.update(label=f"{lbl2} — select from scanned folder"),  # file2_dropdown
                 gr.update(label=lbl2),                                     # file2_text
                 vis2,   # file2_row — vis2 is already gr.update(visible=...), don't double-wrap
+                gr.update(visible=False), gr.update(visible=False),        # hide ZIP inner rows
                 lod_upd, lod_label, lod_param,
                 _step_indicator_html(2), 2,
             )
@@ -2265,6 +2731,7 @@ def build_ui() -> gr.Blocks:
             inputs=[template_dropdown, file1_text, base_location_state],
             outputs=[template_desc_html, params_json_box, param_help_html,
                      file1_dropdown, file1_text, file2_dropdown, file2_text, file2_row,
+                     zip1_inner_row, zip2_inner_row,
                      lod_editor, lod_label_html, lod_param_key_state,
                      step_html, step_state],
         )
@@ -2508,7 +2975,7 @@ def build_ui() -> gr.Blocks:
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Preprocessing Script Library — Gradio UI")
-    parser.add_argument("--port",  type=int, default=7867)
+    parser.add_argument("--port",  type=int, default=7868)
     parser.add_argument("--host",  type=str, default="127.0.0.1")
     parser.add_argument("--share", action="store_true")
     args = parser.parse_args()

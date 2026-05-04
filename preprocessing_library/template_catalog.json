@@ -1,7 +1,7 @@
 [
   {
     "template_name": "file_detect_load",
-    "display_name": "PS-01 \u2014 Detect & Load",
+    "display_name": "PS-01 — Detect & Load",
     "description": "Auto-detect file format and load it into a clean output file.",
     "function_sig": "preprocess(input_path: str) -> str",
     "input_type": "single",
@@ -13,12 +13,6 @@
         "help": "Directory to write the output file."
       },
       {
-        "name": "OUTPUT_FILENAME",
-        "type": "str",
-        "default": "detected_output.csv",
-        "help": "Name of the output file."
-      },
-      {
         "name": "OUTPUT_FORMAT",
         "type": "str",
         "default": "csv",
@@ -28,19 +22,31 @@
         "name": "OUTPUT_FILENAME_PREFIX",
         "type": "str",
         "default": "loaded_",
-        "help": "Prefix prepended when no OUTPUT_FILENAME is given."
+        "help": "Prefix prepended to the original filename to form the output filename."
       },
       {
-        "name": "ENCODING_ORDER",
-        "type": "list",
-        "default": "[\"utf-8\", \"cp1252\", \"latin-1\"]",
-        "help": "Encodings tried in order for text files."
+        "name": "ENCODING_PRIMARY",
+        "type": "str",
+        "default": "utf-8",
+        "help": "First encoding to try when reading text files."
+      },
+      {
+        "name": "ENCODING_FALLBACK_1",
+        "type": "str",
+        "default": "cp1252",
+        "help": "Second encoding to try if ENCODING_PRIMARY fails."
+      },
+      {
+        "name": "ENCODING_FALLBACK_2",
+        "type": "str",
+        "default": "latin-1",
+        "help": "Third encoding to try if ENCODING_FALLBACK_1 fails."
       }
     ]
   },
   {
     "template_name": "file_union",
-    "display_name": "PS-02 \u2014 File Union (Vertical Stack)",
+    "display_name": "PS-02 — File Union (Vertical Stack)",
     "description": "Vertically stack (union) multiple files. Handles column mismatches and optional source tagging.",
     "function_sig": "preprocess(input_paths: list, output_columns=None) -> str",
     "input_type": "multi",
@@ -79,16 +85,76 @@
   },
   {
     "template_name": "file_join_two",
-    "display_name": "PS-03 \u2014 Join Two Files",
-    "description": "Join two files on a single key column with configurable join type.",
-    "function_sig": "preprocess(left_path: str, right_path: str) -> str",
+    "display_name": "PS-03 — Join Two Files",
+    "description": "Join two files on a single key column with configurable join type. Files are resolved by name from the input list — order does not matter.",
+    "function_sig": "preprocess(input_paths: list) -> str",
     "input_type": "multi",
     "parameters": [
+      {
+        "name": "LEFT_FILENAME",
+        "type": "str",
+        "default": "customers.csv",
+        "help": "Filename of the left (primary) file. Matched by basename in input_paths."
+      },
+      {
+        "name": "RIGHT_FILENAME",
+        "type": "str",
+        "default": "invoices.csv",
+        "help": "Filename of the right file. Matched by basename in input_paths."
+      },
+      {
+        "name": "LEFT_USECOLS",
+        "type": "list",
+        "default": "[]",
+        "help": "Columns to load from the left file. [] = load all columns."
+      },
+      {
+        "name": "RIGHT_USECOLS",
+        "type": "list",
+        "default": "[]",
+        "help": "Columns to load from the right file. [] = load all columns."
+      },
+      {
+        "name": "LEFT_INNER_FILE",
+        "type": "str",
+        "default": "",
+        "help": "When the left input is a ZIP, extract this named file (e.g. customers.csv). \"\" = use the first supported file."
+      },
+      {
+        "name": "RIGHT_INNER_FILE",
+        "type": "str",
+        "default": "",
+        "help": "When the right input is a ZIP, extract this named file (e.g. invoices.csv). \"\" = use the first supported file."
+      },
+      {
+        "name": "DEDUP_RIGHT_BY",
+        "type": "str",
+        "default": "",
+        "help": "Column to deduplicate the right file on before joining. \"\" = skip deduplication."
+      },
+      {
+        "name": "DEDUP_KEEP",
+        "type": "str",
+        "default": "first",
+        "help": "Which duplicate to keep when deduplicating: \"first\" or \"last\"."
+      },
       {
         "name": "JOIN_KEY",
         "type": "str",
         "default": "id",
-        "help": "Column name to join on (must exist in both files)."
+        "help": "Shared column name to join on. Used when LEFT_KEY and RIGHT_KEY are both empty."
+      },
+      {
+        "name": "LEFT_KEY",
+        "type": "str",
+        "default": "",
+        "help": "Override: join key column name in the left file. Leave empty to use JOIN_KEY."
+      },
+      {
+        "name": "RIGHT_KEY",
+        "type": "str",
+        "default": "",
+        "help": "Override: join key column name in the right file. Leave empty to use JOIN_KEY."
       },
       {
         "name": "JOIN_TYPE",
@@ -100,25 +166,43 @@
         "name": "LEFT_SUFFIX",
         "type": "str",
         "default": "_left",
-        "help": "Suffix for overlapping columns from the left file."
+        "help": "Suffix appended to overlapping column names from the left file."
       },
       {
         "name": "RIGHT_SUFFIX",
         "type": "str",
         "default": "_right",
-        "help": "Suffix for overlapping columns from the right file."
+        "help": "Suffix appended to overlapping column names from the right file."
+      },
+      {
+        "name": "OUTPUT_DROP_COLUMNS",
+        "type": "list",
+        "default": "[]",
+        "help": "Columns to drop from the merged result before writing. [] = keep all columns."
+      },
+      {
+        "name": "INSERT_COLUMN",
+        "type": "str",
+        "default": "",
+        "help": "Reposition this column immediately after INSERT_AFTER_COLUMN. \"\" = skip reordering."
+      },
+      {
+        "name": "INSERT_AFTER_COLUMN",
+        "type": "str",
+        "default": "",
+        "help": "Anchor column — INSERT_COLUMN is placed immediately after this column."
       },
       {
         "name": "OUTPUT_DIR",
         "type": "str",
         "default": "./output",
-        "help": "Directory to write the output file."
+        "help": "Directory to write the output file. \"\" = same directory as the left input file."
       },
       {
         "name": "OUTPUT_FILENAME",
         "type": "str",
         "default": "joined.csv",
-        "help": "Name of the output file."
+        "help": "Name of the merged output file."
       },
       {
         "name": "OUTPUT_FORMAT",
@@ -130,28 +214,34 @@
   },
   {
     "template_name": "file_join_multi",
-    "display_name": "PS-04 \u2014 Join Multiple Files (Sequential)",
-    "description": "Join multiple files sequentially, each step with its own key/type/suffixes.",
+    "display_name": "PS-04 — Join Multiple Files (Sequential)",
+    "description": "Chain-join three or more files sequentially. Each step defines the next file to join and the key to join on. Files can be resolved by filename (recommended) or by position.",
     "function_sig": "preprocess(input_paths: list) -> str",
     "input_type": "multi",
     "parameters": [
       {
+        "name": "BASE_FILENAME",
+        "type": "str",
+        "default": "",
+        "help": "Filename of the base (primary) file to start the join chain. \"\" = use first file in input_paths."
+      },
+      {
         "name": "JOIN_STEPS",
         "type": "list_of_dicts",
-        "default": "[{\"key\": \"id\", \"how\": \"inner\", \"left_suffix\": \"_l\", \"right_suffix\": \"_r\"}]",
-        "help": "List of join steps. Each: {\"key\": \"col\", \"how\": \"inner|left|right|outer\", \"left_suffix\": \"_l\", \"right_suffix\": \"_r\"}"
+        "default": "[{\"filename\": \"products.csv\", \"join_key\": \"product_id\", \"join_type\": \"left\"}, {\"filename\": \"categories.csv\", \"join_key\": \"category_id\", \"join_type\": \"inner\"}]",
+        "help": "List of join steps. Each step: {\"filename\": \"file.csv\", \"join_key\": \"col\", \"join_type\": \"left|inner|right|outer\", \"left_suffix\": \"_x\", \"right_suffix\": \"_y\"}. Use 'filename' (matched by basename, order-independent) or legacy 'file_index' (positional). 'filename' takes priority."
       },
       {
         "name": "OUTPUT_DIR",
         "type": "str",
         "default": "./output",
-        "help": "Directory to write the output file."
+        "help": "Directory to write the output file. \"\" = same directory as the base input file."
       },
       {
         "name": "OUTPUT_FILENAME",
         "type": "str",
         "default": "multi_joined.csv",
-        "help": "Name of the output file."
+        "help": "Name of the final merged output file."
       },
       {
         "name": "OUTPUT_FORMAT",
@@ -163,16 +253,76 @@
   },
   {
     "template_name": "file_join_multi_key",
-    "display_name": "PS-05 \u2014 Join Two Files (Multi-Key)",
-    "description": "Join two files on multiple key columns simultaneously.",
-    "function_sig": "preprocess(left_path: str, right_path: str) -> str",
+    "display_name": "PS-05 — Join Two Files (Multi-Key)",
+    "description": "Join two files on multiple key columns simultaneously (composite key). Files are resolved by name from the input list — order does not matter.",
+    "function_sig": "preprocess(input_paths: list) -> str",
     "input_type": "multi",
     "parameters": [
+      {
+        "name": "LEFT_FILENAME",
+        "type": "str",
+        "default": "customers.csv",
+        "help": "Filename of the left (primary) file. Matched by basename in input_paths."
+      },
+      {
+        "name": "RIGHT_FILENAME",
+        "type": "str",
+        "default": "invoices.csv",
+        "help": "Filename of the right file. Matched by basename in input_paths."
+      },
+      {
+        "name": "LEFT_USECOLS",
+        "type": "list",
+        "default": "[]",
+        "help": "Columns to load from the left file. [] = load all columns."
+      },
+      {
+        "name": "RIGHT_USECOLS",
+        "type": "list",
+        "default": "[]",
+        "help": "Columns to load from the right file. [] = load all columns."
+      },
+      {
+        "name": "LEFT_INNER_FILE",
+        "type": "str",
+        "default": "",
+        "help": "When the left input is a ZIP, extract this named file (e.g. customers.csv). \"\" = use the first supported file."
+      },
+      {
+        "name": "RIGHT_INNER_FILE",
+        "type": "str",
+        "default": "",
+        "help": "When the right input is a ZIP, extract this named file (e.g. invoices.csv). \"\" = use the first supported file."
+      },
+      {
+        "name": "DEDUP_RIGHT_BY",
+        "type": "str",
+        "default": "",
+        "help": "Column to deduplicate the right file on before joining. \"\" = skip deduplication."
+      },
+      {
+        "name": "DEDUP_KEEP",
+        "type": "str",
+        "default": "first",
+        "help": "Which duplicate to keep when deduplicating: \"first\" or \"last\"."
+      },
       {
         "name": "JOIN_KEYS",
         "type": "list",
         "default": "[\"id\", \"date\"]",
-        "help": "List of column names to join on."
+        "help": "List of shared column names to join on. Used when LEFT_KEYS and RIGHT_KEYS are both empty."
+      },
+      {
+        "name": "LEFT_KEYS",
+        "type": "list",
+        "default": "[]",
+        "help": "Override: list of join key column names in the left file. Leave [] to use JOIN_KEYS."
+      },
+      {
+        "name": "RIGHT_KEYS",
+        "type": "list",
+        "default": "[]",
+        "help": "Override: list of join key column names in the right file. Leave [] to use JOIN_KEYS."
       },
       {
         "name": "JOIN_TYPE",
@@ -184,25 +334,43 @@
         "name": "LEFT_SUFFIX",
         "type": "str",
         "default": "_left",
-        "help": "Suffix for overlapping columns from the left file."
+        "help": "Suffix appended to overlapping column names from the left file."
       },
       {
         "name": "RIGHT_SUFFIX",
         "type": "str",
         "default": "_right",
-        "help": "Suffix for overlapping columns from the right file."
+        "help": "Suffix appended to overlapping column names from the right file."
+      },
+      {
+        "name": "OUTPUT_DROP_COLUMNS",
+        "type": "list",
+        "default": "[]",
+        "help": "Columns to drop from the merged result before writing. [] = keep all columns."
+      },
+      {
+        "name": "INSERT_COLUMN",
+        "type": "str",
+        "default": "",
+        "help": "Reposition this column immediately after INSERT_AFTER_COLUMN. \"\" = skip reordering."
+      },
+      {
+        "name": "INSERT_AFTER_COLUMN",
+        "type": "str",
+        "default": "",
+        "help": "Anchor column — INSERT_COLUMN is placed immediately after this column."
       },
       {
         "name": "OUTPUT_DIR",
         "type": "str",
         "default": "./output",
-        "help": "Directory to write the output file."
+        "help": "Directory to write the output file. \"\" = same directory as the left input file."
       },
       {
         "name": "OUTPUT_FILENAME",
         "type": "str",
         "default": "multikey_join.csv",
-        "help": "Name of the output file."
+        "help": "Name of the merged output file."
       },
       {
         "name": "OUTPUT_FORMAT",
@@ -214,16 +382,76 @@
   },
   {
     "template_name": "file_denormalize",
-    "display_name": "PS-06 \u2014 Denormalize (Header + Detail)",
-    "description": "Join a header file and a detail file; prefix all detail columns.",
-    "function_sig": "preprocess(header_path: str, detail_path: str) -> str",
+    "display_name": "PS-06 — Denormalize (Header + Detail)",
+    "description": "Join a header (master) file and a detail file; prefix all detail columns. Files are resolved by name from the input list — order does not matter.",
+    "function_sig": "preprocess(input_paths: list) -> str",
     "input_type": "multi",
     "parameters": [
+      {
+        "name": "HEADER_FILENAME",
+        "type": "str",
+        "default": "customers.csv",
+        "help": "Filename of the header (master) file. Matched by basename in input_paths."
+      },
+      {
+        "name": "DETAIL_FILENAME",
+        "type": "str",
+        "default": "invoices.csv",
+        "help": "Filename of the detail file. Matched by basename in input_paths."
+      },
+      {
+        "name": "LEFT_USECOLS",
+        "type": "list",
+        "default": "[]",
+        "help": "Columns to load from the header (master) file. [] = load all columns."
+      },
+      {
+        "name": "RIGHT_USECOLS",
+        "type": "list",
+        "default": "[]",
+        "help": "Columns to load from the detail file. [] = load all columns."
+      },
+      {
+        "name": "LEFT_INNER_FILE",
+        "type": "str",
+        "default": "",
+        "help": "When the header input is a ZIP, extract this named file. \"\" = use the first supported file."
+      },
+      {
+        "name": "RIGHT_INNER_FILE",
+        "type": "str",
+        "default": "",
+        "help": "When the detail input is a ZIP, extract this named file. \"\" = use the first supported file."
+      },
+      {
+        "name": "DEDUP_RIGHT_BY",
+        "type": "str",
+        "default": "",
+        "help": "Column to deduplicate the detail file on before joining. \"\" = skip deduplication."
+      },
+      {
+        "name": "DEDUP_KEEP",
+        "type": "str",
+        "default": "first",
+        "help": "Which duplicate to keep when deduplicating: \"first\" or \"last\"."
+      },
       {
         "name": "JOIN_KEY",
         "type": "str",
         "default": "id",
-        "help": "Column shared by header and detail files."
+        "help": "Shared column name. Used when LEFT_KEY and RIGHT_KEY are both empty."
+      },
+      {
+        "name": "LEFT_KEY",
+        "type": "str",
+        "default": "",
+        "help": "Override: join key column name in the header file. Leave empty to use JOIN_KEY."
+      },
+      {
+        "name": "RIGHT_KEY",
+        "type": "str",
+        "default": "",
+        "help": "Override: join key column name in the detail file. Leave empty to use JOIN_KEY."
       },
       {
         "name": "JOIN_TYPE",
@@ -232,16 +460,46 @@
         "help": "inner | left | right | outer"
       },
       {
+        "name": "LEFT_SUFFIX",
+        "type": "str",
+        "default": "_left",
+        "help": "Suffix appended to overlapping column names from the header file."
+      },
+      {
+        "name": "RIGHT_SUFFIX",
+        "type": "str",
+        "default": "_right",
+        "help": "Suffix appended to overlapping column names from the detail file."
+      },
+      {
         "name": "DETAIL_PREFIX",
         "type": "str",
         "default": "detail_",
         "help": "Prefix added to every detail column (except the join key)."
       },
       {
+        "name": "OUTPUT_DROP_COLUMNS",
+        "type": "list",
+        "default": "[]",
+        "help": "Columns to drop from the merged result before writing. [] = keep all columns."
+      },
+      {
+        "name": "INSERT_COLUMN",
+        "type": "str",
+        "default": "",
+        "help": "Reposition this column immediately after INSERT_AFTER_COLUMN. \"\" = skip reordering."
+      },
+      {
+        "name": "INSERT_AFTER_COLUMN",
+        "type": "str",
+        "default": "",
+        "help": "Anchor column — INSERT_COLUMN is placed immediately after this column."
+      },
+      {
         "name": "OUTPUT_DIR",
         "type": "str",
         "default": "./output",
-        "help": "Directory to write the output file."
+        "help": "Directory to write the output file. \"\" = same directory as the header input file."
       },
       {
         "name": "OUTPUT_FILENAME",
@@ -259,7 +517,7 @@
   },
   {
     "template_name": "file_split_by_value",
-    "display_name": "PS-07 \u2014 Split by Column Value",
+    "display_name": "PS-07 — Split by Column Value",
     "description": "Split a file into one output file per unique value in a chosen column.",
     "function_sig": "preprocess(input_path: str) -> str",
     "input_type": "single",
@@ -281,12 +539,24 @@
         "type": "str",
         "default": "csv",
         "help": "csv | xlsx | json | parquet | tsv"
+      },
+      {
+        "name": "FILENAME_TEMPLATE",
+        "type": "str",
+        "default": "{split_column}_{value}.csv",
+        "help": "Template for split output filenames. Supports {split_column} and {value} placeholders."
+      },
+      {
+        "name": "INCLUDE_SPLIT_COLUMN",
+        "type": "bool",
+        "default": "True",
+        "help": "If True, the split column is retained in every output file. If False, it is dropped."
       }
     ]
   },
   {
     "template_name": "file_filter_to_files",
-    "display_name": "PS-08 \u2014 Filter Rows to Files (Query)",
+    "display_name": "PS-08 — Filter Rows to Files (Query)",
     "description": "Route rows to named output files using pandas query() expressions.",
     "function_sig": "preprocess(input_path: str) -> str",
     "input_type": "single",
@@ -319,7 +589,7 @@
   },
   {
     "template_name": "file_split_columns",
-    "display_name": "PS-09 \u2014 Split Columns to Files",
+    "display_name": "PS-09 — Split Columns to Files",
     "description": "Split a wide file into multiple narrower files, each containing a subset of columns.",
     "function_sig": "preprocess(input_path: str) -> str",
     "input_type": "single",
@@ -352,7 +622,7 @@
   },
   {
     "template_name": "file_deduplicate",
-    "display_name": "PS-10 \u2014 Deduplicate",
+    "display_name": "PS-10 — Deduplicate",
     "description": "Remove duplicate rows based on selected key columns.",
     "function_sig": "preprocess(input_path: str) -> str",
     "input_type": "single",
@@ -370,10 +640,10 @@
         "help": "first | last | none (keep=False drops all duplicates)"
       },
       {
-        "name": "DUPLICATES_FILENAME",
+        "name": "DUPLICATES_REPORT_FILENAME",
         "type": "str",
-        "default": "duplicates.csv",
-        "help": "File for removed duplicate rows. Empty to discard."
+        "default": "duplicates_report.csv",
+        "help": "File for removed duplicate rows. Empty string to discard."
       },
       {
         "name": "OUTPUT_DIR",
@@ -397,22 +667,22 @@
   },
   {
     "template_name": "file_rename_columns",
-    "display_name": "PS-11 \u2014 Rename Columns",
+    "display_name": "PS-11 — Rename Columns",
     "description": "Rename columns via a mapping dict; optionally drop unmapped columns.",
     "function_sig": "preprocess(input_path: str) -> str",
     "input_type": "single",
     "parameters": [
       {
-        "name": "COLUMN_MAP",
+        "name": "COLUMN_MAPPING",
         "type": "dict",
         "default": "{\"OldName\": \"NewName\", \"Col2\": \"Column2\"}",
-        "help": "Dict of {old_name: new_name} pairs."
+        "help": "Dict of {old_column_name: new_column_name} pairs."
       },
       {
         "name": "DROP_UNMAPPED",
         "type": "bool",
         "default": "False",
-        "help": "If True, only columns present in COLUMN_MAP are kept in the output."
+        "help": "If True, only columns present in COLUMN_MAPPING are kept in the output."
       },
       {
         "name": "OUTPUT_DIR",
@@ -436,22 +706,28 @@
   },
   {
     "template_name": "file_handle_nulls",
-    "display_name": "PS-12 \u2014 Handle Nulls",
+    "display_name": "PS-12 — Handle Nulls",
     "description": "Audit and clean null values: fill, drop, or flag per column.",
     "function_sig": "preprocess(input_path: str) -> str",
     "input_type": "single",
     "parameters": [
       {
-        "name": "NULL_STRATEGIES",
+        "name": "NULL_RULES",
         "type": "list_of_dicts",
         "default": "[{\"column\": \"*\", \"strategy\": \"fill_value\", \"value\": \"\"}]",
-        "help": "List of strategies. Each: {\"column\": \"col_or_*\", \"strategy\": \"...\", \"value\": \"optional\"}. Strategies: fill_value, fill_mean, fill_median, fill_mode, fill_forward, fill_backward, drop_row."
+        "help": "List of per-column null handling rules. Each: {\"column\": \"col_or_*\", \"strategy\": \"fill_value|fill_mean|fill_median|fill_mode|fill_forward|fill_backward|drop_row\", \"value\": \"optional_fill_value\"}. Use column=\"*\" to apply a rule to all columns."
       },
       {
-        "name": "NULL_AUDIT_FILENAME",
+        "name": "NULL_VALUES",
+        "type": "list",
+        "default": "[\"\", \"NULL\", \"N/A\", \"NA\", \"none\", \"NONE\"]",
+        "help": "List of string values to treat as null before applying NULL_RULES."
+      },
+      {
+        "name": "NULL_REPORT_FILENAME",
         "type": "str",
         "default": "null_audit.csv",
-        "help": "Filename for the pre-clean null audit report. Empty to skip."
+        "help": "Filename for the pre-clean null audit report. Empty string to skip."
       },
       {
         "name": "OUTPUT_DIR",
@@ -475,34 +751,40 @@
   },
   {
     "template_name": "file_cast_types",
-    "display_name": "PS-13 \u2014 Cast Column Types",
+    "display_name": "PS-13 — Cast Column Types",
     "description": "Cast columns to target types (int, float, date, bool, str, currency).",
     "function_sig": "preprocess(input_path: str) -> str",
     "input_type": "single",
     "parameters": [
       {
-        "name": "CAST_RULES",
+        "name": "TYPE_RULES",
         "type": "list_of_dicts",
         "default": "[{\"column\": \"amount\", \"target_type\": \"float\"}, {\"column\": \"date\", \"target_type\": \"date\", \"date_format\": \"%Y-%m-%d\"}]",
-        "help": "List of cast rules. Each: {\"column\": \"col\", \"target_type\": \"int|float|str|bool|date|currency\", \"date_format\": \"%Y-%m-%d\" (for date type)}."
-      },
-      {
-        "name": "ON_ERROR",
-        "type": "str",
-        "default": "nullify",
-        "help": "nullify | keep_original | drop_row"
-      },
-      {
-        "name": "ERROR_FILENAME",
-        "type": "str",
-        "default": "cast_errors.csv",
-        "help": "File for rows with cast errors. Empty to discard."
+        "help": "List of cast rules. Each: {\"column\": \"col\", \"target_type\": \"int|float|str|bool|date|currency\", \"date_format\": \"%Y-%m-%d\" (required for date type)}."
       },
       {
         "name": "STRIP_CURRENCY",
         "type": "bool",
         "default": "True",
-        "help": "Strip \u00a3$\u20ac and commas before casting currency columns."
+        "help": "Strip £$€ and commas before casting currency columns."
+      },
+      {
+        "name": "TRIM_STRINGS",
+        "type": "bool",
+        "default": "True",
+        "help": "Strip leading and trailing whitespace from all string columns before casting."
+      },
+      {
+        "name": "ON_ERROR",
+        "type": "str",
+        "default": "nullify",
+        "help": "What to do when a cast fails: nullify | keep_original | drop_row"
+      },
+      {
+        "name": "CAST_ERROR_REPORT_FILENAME",
+        "type": "str",
+        "default": "cast_errors.csv",
+        "help": "File for rows with cast errors. Empty string to discard error rows."
       },
       {
         "name": "OUTPUT_DIR",
@@ -526,7 +808,7 @@
   },
   {
     "template_name": "file_aggregate",
-    "display_name": "PS-14 \u2014 Aggregate / Group-By",
+    "display_name": "PS-14 — Aggregate / Group-By",
     "description": "Group rows by key columns and apply aggregate functions per metric column.",
     "function_sig": "preprocess(input_path: str) -> str",
     "input_type": "single",
@@ -541,7 +823,7 @@
         "name": "AGGREGATIONS",
         "type": "list_of_dicts",
         "default": "[{\"column\": \"amount\", \"function\": \"sum\", \"output_column\": \"total_amount\"}]",
-        "help": "Aggregation rules. Each: {\"column\": \"col\", \"function\": \"sum|mean|min|max|count|first|last|concat\", \"output_column\": \"result_col\"}."
+        "help": "Aggregation rules. Each: {\"column\": \"col\", \"function\": \"sum|mean|min|max|count|nunique|first|last|std\", \"output_column\": \"result_col\"}."
       },
       {
         "name": "OUTPUT_DIR",
@@ -565,11 +847,47 @@
   },
   {
     "template_name": "file_delta_load",
-    "display_name": "PS-15 \u2014 Delta Load (Change Detection)",
-    "description": "Compare a new file against an old file and tag rows as NEW / DELETED / CHANGED / UNCHANGED.",
-    "function_sig": "preprocess(new_path: str, old_path: str) -> str",
+    "display_name": "PS-15 — Delta Load (Change Detection)",
+    "description": "Compare a new file against an old file and tag rows as NEW / CHANGED / DELETED. Files are resolved by name from the input list — order does not matter.",
+    "function_sig": "preprocess(input_paths: list) -> str",
     "input_type": "multi",
     "parameters": [
+      {
+        "name": "NEW_FILENAME",
+        "type": "str",
+        "default": "invoices_today.csv",
+        "help": "Filename of the current (new) file. Matched by basename in input_paths."
+      },
+      {
+        "name": "OLD_FILENAME",
+        "type": "str",
+        "default": "invoices_yesterday.csv",
+        "help": "Filename of the baseline (previous) file. Matched by basename in input_paths."
+      },
+      {
+        "name": "LEFT_USECOLS",
+        "type": "list",
+        "default": "[]",
+        "help": "Columns to load from the new (current) file. [] = load all columns."
+      },
+      {
+        "name": "RIGHT_USECOLS",
+        "type": "list",
+        "default": "[]",
+        "help": "Columns to load from the old (baseline) file. [] = load all columns."
+      },
+      {
+        "name": "LEFT_INNER_FILE",
+        "type": "str",
+        "default": "",
+        "help": "When the new file input is a ZIP, extract this named file. \"\" = use the first supported file."
+      },
+      {
+        "name": "RIGHT_INNER_FILE",
+        "type": "str",
+        "default": "",
+        "help": "When the old file input is a ZIP, extract this named file. \"\" = use the first supported file."
+      },
       {
         "name": "KEY_COLUMNS",
         "type": "list",
@@ -580,19 +898,37 @@
         "name": "COMPARE_COLUMNS",
         "type": "list",
         "default": "[]",
-        "help": "Columns to check for changes. Empty list = compare ALL non-key columns."
+        "help": "Columns to check for changes. Empty list [] = compare ALL non-key columns."
       },
       {
         "name": "DELTA_MODE",
         "type": "str",
-        "default": "all",
-        "help": "all | new_only | deleted_only | changed_only | unchanged_only"
+        "default": "full_delta",
+        "help": "new_only | changed_only | full_delta (NEW + CHANGED + DELETED)"
       },
       {
-        "name": "DELTA_TAG_COLUMN",
+        "name": "DELTA_STATUS_COLUMN",
         "type": "str",
-        "default": "_delta",
-        "help": "Name of the tag column added to every output row."
+        "default": "Delta_Status",
+        "help": "Name of the status column added to every output row. Values: NEW | CHANGED | DELETED."
+      },
+      {
+        "name": "OUTPUT_DROP_COLUMNS",
+        "type": "list",
+        "default": "[]",
+        "help": "Columns to drop from the delta result before writing. [] = keep all columns."
+      },
+      {
+        "name": "INSERT_COLUMN",
+        "type": "str",
+        "default": "",
+        "help": "Reposition this column immediately after INSERT_AFTER_COLUMN. \"\" = skip reordering."
+      },
+      {
+        "name": "INSERT_AFTER_COLUMN",
+        "type": "str",
+        "default": "",
+        "help": "Anchor column — INSERT_COLUMN is placed immediately after this column."
       },
       {
         "name": "OUTPUT_DIR",
@@ -616,7 +952,7 @@
   },
   {
     "template_name": "file_rank_filter",
-    "display_name": "PS-16 \u2014 Rank & Filter (Top-N per Group)",
+    "display_name": "PS-16 — Rank & Filter (Top-N per Group)",
     "description": "Rank rows within groups (or globally), keep top-N, optionally write discarded rows.",
     "function_sig": "preprocess(input_path: str) -> str",
     "input_type": "single",
@@ -685,7 +1021,7 @@
   },
   {
     "template_name": "file_filter_by_values",
-    "display_name": "PS-17 \u2014 Filter by Value List",
+    "display_name": "PS-17 — Filter by Value List",
     "description": "Route rows to named files by matching a column against value lists. Unmatched rows go to an 'others' file.",
     "function_sig": "preprocess(input_path: str) -> str",
     "input_type": "single",
@@ -725,6 +1061,288 @@
         "type": "str",
         "default": "csv",
         "help": "csv | xlsx | json | parquet | tsv"
+      }
+    ]
+  },
+  {
+    "template_name": "file_join_filter_agg",
+    "display_name": "PS-18 — Join, Filter & Aggregate",
+    "description": "Join two files, apply an optional WHERE filter on the result, group-by aggregate, then optionally rank and keep top-N rows. Files are resolved by name from the input list.",
+    "function_sig": "preprocess(input_paths: list) -> str",
+    "input_type": "multi",
+    "parameters": [
+      {
+        "name": "LEFT_FILENAME",
+        "type": "str",
+        "default": "customers.csv",
+        "help": "Filename of the left (primary) file. Matched by basename in input_paths."
+      },
+      {
+        "name": "RIGHT_FILENAME",
+        "type": "str",
+        "default": "invoices.csv",
+        "help": "Filename of the right file. Matched by basename in input_paths."
+      },
+      {
+        "name": "LEFT_USECOLS",
+        "type": "list",
+        "default": "[]",
+        "help": "Columns to load from the left file. [] = load all columns."
+      },
+      {
+        "name": "RIGHT_USECOLS",
+        "type": "list",
+        "default": "[]",
+        "help": "Columns to load from the right file. [] = load all columns."
+      },
+      {
+        "name": "LEFT_INNER_FILE",
+        "type": "str",
+        "default": "",
+        "help": "When the left input is a ZIP, extract this named file (e.g. customers.csv). \"\" = use the first supported file."
+      },
+      {
+        "name": "RIGHT_INNER_FILE",
+        "type": "str",
+        "default": "",
+        "help": "When the right input is a ZIP, extract this named file (e.g. invoices.csv). \"\" = use the first supported file."
+      },
+      {
+        "name": "DEDUP_RIGHT_BY",
+        "type": "str",
+        "default": "",
+        "help": "Column to deduplicate the right file on before joining. \"\" = skip deduplication."
+      },
+      {
+        "name": "DEDUP_KEEP",
+        "type": "str",
+        "default": "first",
+        "help": "Which duplicate to keep when deduplicating: \"first\" or \"last\"."
+      },
+      {
+        "name": "JOIN_KEYS",
+        "type": "list",
+        "default": "[\"id\"]",
+        "help": "List of column names to join on (shared by both files)."
+      },
+      {
+        "name": "JOIN_TYPE",
+        "type": "str",
+        "default": "inner",
+        "help": "inner | left | right | outer"
+      },
+      {
+        "name": "LEFT_SUFFIX",
+        "type": "str",
+        "default": "_left",
+        "help": "Suffix appended to overlapping column names from the left file."
+      },
+      {
+        "name": "RIGHT_SUFFIX",
+        "type": "str",
+        "default": "_right",
+        "help": "Suffix appended to overlapping column names from the right file."
+      },
+      {
+        "name": "WHERE_CONDITION",
+        "type": "str",
+        "default": "",
+        "help": "pandas query() expression applied to the joined result before aggregation. \"\" = no filter. Example: \"amount > 100 and status == 'ACTIVE'\""
+      },
+      {
+        "name": "GROUP_BY_COLUMNS",
+        "type": "list",
+        "default": "[\"category\"]",
+        "help": "Columns to group by. Use [] to aggregate across all rows without grouping."
+      },
+      {
+        "name": "AGGREGATIONS",
+        "type": "list_of_dicts",
+        "default": "[{\"column\": \"*\", \"function\": \"count\", \"output_column\": \"_row_count\"}, {\"column\": \"amount\", \"function\": \"sum\", \"output_column\": \"total_amount\"}]",
+        "help": "Aggregation rules. Each: {\"column\": \"col_or_*\", \"function\": \"count|sum|mean|min|max|nunique|first|last|std\", \"output_column\": \"result_col\"}. Use column=\"*\" for row count."
+      },
+      {
+        "name": "RANK_BY_COLUMN",
+        "type": "str",
+        "default": "",
+        "help": "Column to rank aggregated rows by. \"\" = skip ranking."
+      },
+      {
+        "name": "RANK_ORDER",
+        "type": "str",
+        "default": "desc",
+        "help": "asc (rank 1 = smallest) | desc (rank 1 = largest)."
+      },
+      {
+        "name": "RANK_COLUMN_NAME",
+        "type": "str",
+        "default": "_rank",
+        "help": "Name of the rank column added to the output (only used when RANK_BY_COLUMN is set)."
+      },
+      {
+        "name": "KEEP_TOP_N",
+        "type": "int",
+        "default": "0",
+        "help": "Keep only rows with rank <= N. 0 = keep all rows."
+      },
+      {
+        "name": "OUTPUT_DROP_COLUMNS",
+        "type": "list",
+        "default": "[]",
+        "help": "Columns to drop from the result before writing. [] = keep all columns."
+      },
+      {
+        "name": "INSERT_COLUMN",
+        "type": "str",
+        "default": "",
+        "help": "Reposition this column immediately after INSERT_AFTER_COLUMN. \"\" = skip reordering."
+      },
+      {
+        "name": "INSERT_AFTER_COLUMN",
+        "type": "str",
+        "default": "",
+        "help": "Anchor column — INSERT_COLUMN is placed immediately after this column."
+      },
+      {
+        "name": "OUTPUT_DIR",
+        "type": "str",
+        "default": "./output",
+        "help": "Directory to write the output file. \"\" = same directory as the left input file."
+      },
+      {
+        "name": "OUTPUT_FILENAME",
+        "type": "str",
+        "default": "join_filter_agg.csv",
+        "help": "Name of the output file."
+      },
+      {
+        "name": "OUTPUT_FORMAT",
+        "type": "str",
+        "default": "csv",
+        "help": "csv | xlsx | json | parquet | tsv"
+      }
+    ]
+  },
+  {
+    "template_name": "file_zip_extract_join",
+    "display_name": "ZIP Extract & Join",
+    "description": "Extract two named files from a ZIP, optionally column-select both files, dedup the right file, join on configurable keys (supports different column names on each side), drop unwanted output columns, and optionally reorder a result column. All other ZIP contents can be passed through to the output directory.",
+    "function_sig": "preprocess(input_paths: list) -> list",
+    "input_type": "single",
+    "parameters": [
+      {
+        "name": "LEFT_FILE_IN_ZIP",
+        "type": "str",
+        "default": "filings.txt",
+        "help": "Filename of the primary (left) file inside the ZIP."
+      },
+      {
+        "name": "RIGHT_FILE_IN_ZIP",
+        "type": "str",
+        "default": "filingamendments.txt",
+        "help": "Filename of the secondary (right) file inside the ZIP."
+      },
+      {
+        "name": "SKIP_EXTENSIONS",
+        "type": "list",
+        "default": "[\".sql\", \".rtf\"]",
+        "help": "File extensions to ignore inside the ZIP. Use [] to extract everything."
+      },
+      {
+        "name": "EXTRACT_OTHER_FILES",
+        "type": "bool",
+        "default": "True",
+        "help": "If True, every other file in the ZIP (not LEFT, not RIGHT, not SKIP_EXTENSIONS) is extracted to the output directory and included in the returned list."
+      },
+      {
+        "name": "LEFT_USECOLS",
+        "type": "list",
+        "default": "[]",
+        "help": "Columns to load from the LEFT file. [] = load all columns."
+      },
+      {
+        "name": "RIGHT_USECOLS",
+        "type": "list",
+        "default": "[\"FileNumber\", \"AmendmentType\"]",
+        "help": "Columns to load from the RIGHT file. [] = load all columns."
+      },
+      {
+        "name": "DEDUP_RIGHT_BY",
+        "type": "str",
+        "default": "FileNumber",
+        "help": "Column to deduplicate the RIGHT file on before joining. \"\" = skip deduplication."
+      },
+      {
+        "name": "DEDUP_KEEP",
+        "type": "str",
+        "default": "last",
+        "help": "Which duplicate occurrence to keep when deduplicating: \"first\" or \"last\"."
+      },
+      {
+        "name": "JOIN_KEY",
+        "type": "str",
+        "default": "FileNumber",
+        "help": "Shared column name used when both files have the same join column name. Overridden per-side by LEFT_KEY / RIGHT_KEY."
+      },
+      {
+        "name": "LEFT_KEY",
+        "type": "str",
+        "default": "",
+        "help": "Join column name in the LEFT file when it differs from JOIN_KEY. \"\" = use JOIN_KEY."
+      },
+      {
+        "name": "RIGHT_KEY",
+        "type": "str",
+        "default": "",
+        "help": "Join column name in the RIGHT file when it differs from JOIN_KEY. \"\" = use JOIN_KEY."
+      },
+      {
+        "name": "JOIN_TYPE",
+        "type": "str",
+        "default": "left",
+        "help": "Join type: left | inner | right | outer."
+      },
+      {
+        "name": "LEFT_SUFFIX",
+        "type": "str",
+        "default": "_left",
+        "help": "Suffix appended to overlapping column names from the LEFT file after the merge."
+      },
+      {
+        "name": "RIGHT_SUFFIX",
+        "type": "str",
+        "default": "_right",
+        "help": "Suffix appended to overlapping column names from the RIGHT file after the merge."
+      },
+      {
+        "name": "OUTPUT_DROP_COLUMNS",
+        "type": "list",
+        "default": "[]",
+        "help": "Columns to drop from the merged result before writing. [] = keep all columns."
+      },
+      {
+        "name": "INSERT_COLUMN",
+        "type": "str",
+        "default": "AmendmentType",
+        "help": "After the join, reposition this column immediately after INSERT_AFTER_COLUMN. \"\" = skip reordering."
+      },
+      {
+        "name": "INSERT_AFTER_COLUMN",
+        "type": "str",
+        "default": "Type",
+        "help": "Anchor column — INSERT_COLUMN is placed immediately after this column."
+      },
+      {
+        "name": "OUTPUT_FILENAME",
+        "type": "str",
+        "default": "filings_processed.txt",
+        "help": "Filename for the merged output file."
+      },
+      {
+        "name": "OUTPUT_DIR",
+        "type": "str",
+        "default": "",
+        "help": "Directory to write all output files. \"\" = same directory as the input ZIP file."
       }
     ]
   }
