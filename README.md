@@ -22,14 +22,22 @@ PrepKit is a Gradio-based desktop/web app that turns your file preprocessing con
 ## Quick Start
 
 ```bash
+# 0. (Recommended) Create a virtual environment
+python -m venv .venv
+
 # 1. Install dependencies
-pip install -r requirements.txt
+.venv\Scripts\python -m pip install -r requirements.txt
 
 # 2. Launch the app
-python gradio_app.py
+.venv\Scripts\python gradio_app.py
 ```
 
-Open the URL printed in the terminal (usually `http://127.0.0.1:7860`).
+Open the URL printed in the terminal (default `http://127.0.0.1:7862`).
+
+Optional flags:
+- `python gradio_app.py --port 7860`
+- `python gradio_app.py --host 0.0.0.0`
+- `python gradio_app.py --share`
 
 ---
 
@@ -141,46 +149,48 @@ Up to **10 files** per folder scan. Encoding fallback: UTF-8 → cp1252 → lati
 ## Project Structure
 
 ```
-prepkit/
+.
 ├── gradio_app.py                  # Gradio UI + script generator/runner logic
+├── app_history.py                  # SQLite-backed run history (prepkit_history.db)
+├── app_pipeline.py                 # Multi-step pipeline runner (execs generated scripts)
+├── app_profile.py                  # Column profiling stats for Tab 1
 ├── requirements.txt
-├── test_all_templates.py          # End-to-end test for all 18 templates
+├── tests/                          # Unit + end-to-end tests (unittest)
 ├── test_data/                     # Sample input files
 ├── preprocessing_library/
 │   ├── __init__.py                # Exports generate_preprocessor()
 │   ├── generator.py               # Template substitution engine
 │   ├── exceptions.py              # Custom exceptions
-│   └── templates/                 # 18 template .py files
+│   └── templates/                 # Template .py files (placeholders: {{NAME}})
 │       ├── file_detect_load_template.py
 │       ├── file_union_template.py
 │       ├── file_join_two_template.py
-│       └── ... (18 total)
+│       └── ... (PS-01..PS-18 + ZIP helpers)
 ```
 
 ---
 
 ## Requirements
 
-```
-gradio >= 4.0.0
-pandas >= 1.5.0
-openpyxl >= 3.1.0
-xlrd >= 2.0.1
-
-# Optional
-pyarrow >= 12.0.0   # for Parquet output
-lxml >= 4.9.0       # faster XML parsing (stdlib fallback available)
-```
+- Python **3.10+** recommended.
+- See `requirements.txt` for the **exact pinned versions** used for development.
 
 ---
 
 ## Running Tests
 
 ```bash
-python test_all_templates.py
+.venv\Scripts\python -m unittest discover -s tests -v
 ```
 
-Runs all 18 templates against sample data in `test_data/` and reports pass/fail with output shape.
+Includes unit tests for the generator plus end-to-end tests that generate + exec each template and validate outputs.
+
+---
+
+## Documentation
+
+- `Preprocessing_Script_Library.md` — deeper technical reference (generator contract, placeholder syntax, template details).
+- `DEVELOPMENT.md` — contributor/developer notes (tests, adding templates, troubleshooting).
 
 ---
 
