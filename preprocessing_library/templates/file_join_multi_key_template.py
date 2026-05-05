@@ -173,6 +173,72 @@ def _insert_column_after(df: pd.DataFrame, col: str, after: str) -> pd.DataFrame
     return df[cols]
 
 
+def _extract_from_zips(
+    left_path: str,
+    right_path: str,
+    left_inner: str,
+    right_inner: str,
+    out_dir: str,
+) -> tuple:
+    """
+    Extract inner files from ZIP inputs to *out_dir* (persistent, not a temp dir).
+    If both paths point to the same ZIP, opens it only once.
+    Non-ZIP inputs are returned unchanged with no extraction.
+    Returns (left_file_path, right_file_path, list_of_extracted_paths).
+    """
+    os.makedirs(out_dir, exist_ok=True)
+    _supported = {".csv", ".tsv", ".txt", ".xlsx", ".xls", ".json", ".xml"}
+    left_is_zip  = _Path(left_path).suffix.lower()  == ".zip"
+    right_is_zip = _Path(right_path).suffix.lower() == ".zip"
+    same_zip     = (
+        left_is_zip and right_is_zip
+        and os.path.abspath(left_path) == os.path.abspath(right_path)
+    )
+    extracted: list = []
+
+    def _pull(zf, zip_path: str, inner: str) -> str:
+        if inner:
+            for member in zf.namelist():
+                if os.path.basename(member).lower() == inner.lower():
+                    dest = os.path.join(out_dir, os.path.basename(member))
+                    with zf.open(member) as src, open(dest, "wb") as dst:
+                        dst.write(src.read())
+                    return dest
+            raise ValueError(f"'{inner}' not found inside ZIP: {zip_path}")
+        for member in zf.namelist():
+            if _Path(member).suffix.lower() in _supported:
+                dest = os.path.join(out_dir, os.path.basename(member))
+                with zf.open(member) as src, open(dest, "wb") as dst:
+                    dst.write(src.read())
+                return dest
+        raise ValueError(f"No supported file found inside ZIP: {zip_path}")
+
+    if same_zip:
+        with _zipfile.ZipFile(left_path, "r") as zf:
+            lf = _pull(zf, left_path, left_inner)
+            extracted.append(lf)
+            if left_inner.lower() != right_inner.lower():
+                rf = _pull(zf, right_path, right_inner)
+                extracted.append(rf)
+            else:
+                rf = lf
+    else:
+        if left_is_zip:
+            with _zipfile.ZipFile(left_path, "r") as zf:
+                lf = _pull(zf, left_path, left_inner)
+            extracted.append(lf)
+        else:
+            lf = left_path
+        if right_is_zip:
+            with _zipfile.ZipFile(right_path, "r") as zf:
+                rf = _pull(zf, right_path, right_inner)
+            extracted.append(rf)
+        else:
+            rf = right_path
+
+    return lf, rf, extracted
+
+
 def preprocess(input_paths: list) -> list:
     """
     Join LEFT_FILENAME and RIGHT_FILENAME on all columns in JOIN_KEYS
@@ -187,8 +253,13 @@ def preprocess(input_paths: list) -> list:
     Returns
     -------
     list[str]
-        List containing the absolute path to the merged output file.
+        Extracted input files + merged output file path.
     """
+    if isinstance(input_paths, str):
+        input_paths = [input_paths, input_paths]
+    elif isinstance(input_paths, list) and len(input_paths) == 1:
+        input_paths = [input_paths[0], input_paths[0]]
+
     if len(input_paths) < 2:
         raise ValueError(
             f"file_join_multi_key requires exactly 2 input files; got {len(input_paths)}."
@@ -196,8 +267,12 @@ def preprocess(input_paths: list) -> list:
 
     left_path  = _find_input_file(input_paths, LEFT_FILENAME,  0)
     right_path = _find_input_file(input_paths, RIGHT_FILENAME, 1)
-    left  = _apply_usecols(_load_file(left_path,  LEFT_INNER_FILE),  LEFT_USECOLS)
-    right = _apply_usecols(_load_file(right_path, RIGHT_INNER_FILE), RIGHT_USECOLS)
+    _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_paths[0]))
+    left_file, right_file, extracted_paths = _extract_from_zips(
+        left_path, right_path, LEFT_INNER_FILE, RIGHT_INNER_FILE, _out_dir
+    )
+    left  = _apply_usecols(_load_file(left_file),  LEFT_USECOLS)
+    right = _apply_usecols(_load_file(right_file), RIGHT_USECOLS)
 
     if DEDUP_RIGHT_BY and DEDUP_RIGHT_BY in right.columns:
         right = right.drop_duplicates(subset=DEDUP_RIGHT_BY, keep=DEDUP_KEEP or "first")
@@ -249,6 +324,5 @@ def preprocess(input_paths: list) -> list:
     merged = _drop_columns(merged, OUTPUT_DROP_COLUMNS)
     merged = _insert_column_after(merged, INSERT_COLUMN, INSERT_AFTER_COLUMN)
 
-    _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_paths[0]))
     out_path = os.path.join(_out_dir, OUTPUT_FILENAME)
-    return [_write_output(merged, out_path, OUTPUT_FORMAT)]
+    return extracted_paths + [_write_output(merged, out_path, OUTPUT_FORMAT)]
