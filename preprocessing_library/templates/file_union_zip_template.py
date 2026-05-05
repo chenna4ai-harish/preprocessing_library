@@ -169,6 +169,36 @@ def _resolve_and_extract(input_paths: list, out_dir: str) -> tuple:
     union_files: list = []
     all_extracted: list = []
 
+    # ── Scan base directories for any additional ZIPs ─────────────────────
+    _input_abs = {os.path.abspath(str(p).strip()) for p in input_paths}
+    _scanned_dirs: set = set()
+    for _raw in input_paths:
+        _base = str(_Path(str(_raw).strip()).parent)
+        if _base in _scanned_dirs:
+            continue
+        _scanned_dirs.add(_base)
+        try:
+            for _fname in os.listdir(_base):
+                if not _fname.lower().endswith(".zip"):
+                    continue
+                _zip_full = os.path.join(_base, _fname)
+                if os.path.abspath(_zip_full) in _input_abs:
+                    continue  # handled in main loop below
+                try:
+                    with _zipfile.ZipFile(_zip_full, "r") as _zf:
+                        for _member in _zf.namelist():
+                            _mname = os.path.basename(_member)
+                            if not _mname:
+                                continue
+                            _dest = os.path.join(out_dir, _mname)
+                            with _zf.open(_member) as _s, open(_dest, "wb") as _d:
+                                _d.write(_s.read())
+                            all_extracted.append(_dest)
+                except _zipfile.BadZipFile:
+                    pass
+        except OSError:
+            pass
+
     for raw in input_paths:
         path = str(raw).strip()
         if _Path(path).suffix.lower() == ".zip":
