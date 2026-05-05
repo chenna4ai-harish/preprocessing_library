@@ -198,6 +198,36 @@ def _extract_from_zips(
     )
     all_extracted: list = []
 
+    # ── Scan base directories for any additional ZIPs ─────────────────────
+    _input_abs = {os.path.abspath(left_path), os.path.abspath(right_path)}
+    _scanned_dirs: set = set()
+    for _p in (left_path, right_path):
+        _base = str(_Path(_p).parent)
+        if _base in _scanned_dirs:
+            continue
+        _scanned_dirs.add(_base)
+        try:
+            for _fname in os.listdir(_base):
+                if not _fname.lower().endswith(".zip"):
+                    continue
+                _zip_full = os.path.join(_base, _fname)
+                if os.path.abspath(_zip_full) in _input_abs:
+                    continue  # handled below
+                try:
+                    with _zipfile.ZipFile(_zip_full, "r") as _zf:
+                        for _member in _zf.namelist():
+                            _mname = os.path.basename(_member)
+                            if not _mname:
+                                continue
+                            _dest = os.path.join(out_dir, _mname)
+                            with _zf.open(_member) as _s, open(_dest, "wb") as _d:
+                                _d.write(_s.read())
+                            all_extracted.append(_dest)
+                except _zipfile.BadZipFile:
+                    pass
+        except OSError:
+            pass
+
     def _extract_zip_all(zip_path: str) -> dict:
         """Extract every file in the ZIP to out_dir; return {lower_name: dest_path}."""
         name_map: dict = {}
