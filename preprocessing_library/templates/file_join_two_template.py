@@ -183,7 +183,7 @@ def _extract_from_zips(
     """
     Extract ALL files from ZIP inputs to *out_dir* (persistent).
     If both paths point to the same ZIP, opens it only once.
-    Non-ZIP inputs are returned unchanged with no extraction.
+    Non-ZIP inputs are copied to *out_dir* so every input file is present there.
     Returns (left_file_path, right_file_path, list_of_all_extracted_paths).
     """
     os.makedirs(out_dir, exist_ok=True)
@@ -230,11 +230,21 @@ def _extract_from_zips(
         if left_is_zip:
             lf = _pick(_extract_zip_all(left_path), left_inner, left_path)
         else:
-            lf = left_path
+            _dest = os.path.join(out_dir, os.path.basename(left_path))
+            if os.path.abspath(left_path) != os.path.abspath(_dest):
+                with open(left_path, "rb") as _s, open(_dest, "wb") as _d:
+                    _d.write(_s.read())
+            all_extracted.append(_dest)
+            lf = _dest
         if right_is_zip:
             rf = _pick(_extract_zip_all(right_path), right_inner, right_path)
         else:
-            rf = right_path
+            _dest = os.path.join(out_dir, os.path.basename(right_path))
+            if os.path.abspath(right_path) != os.path.abspath(_dest):
+                with open(right_path, "rb") as _s, open(_dest, "wb") as _d:
+                    _d.write(_s.read())
+            all_extracted.append(_dest)
+            rf = _dest
 
     return lf, rf, all_extracted
 

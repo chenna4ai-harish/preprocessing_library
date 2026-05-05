@@ -198,7 +198,12 @@ def _resolve_and_extract(input_paths: list, out_dir: str) -> tuple:
                     raise ValueError(f"No supported file found inside ZIP: {path}")
                 union_files.append(picked)
         else:
-            union_files.append(path)
+            _dest = os.path.join(out_dir, os.path.basename(path))
+            if os.path.abspath(path) != os.path.abspath(_dest):
+                with open(path, "rb") as _s, open(_dest, "wb") as _d:
+                    _d.write(_s.read())
+            all_extracted.append(_dest)
+            union_files.append(_dest)
 
     return union_files, all_extracted
 
