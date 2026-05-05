@@ -175,6 +175,72 @@ def _insert_column_after(df: pd.DataFrame, col: str, after: str) -> pd.DataFrame
     return df[cols]
 
 
+def _extract_from_zips(
+    left_path: str,
+    right_path: str,
+    left_inner: str,
+    right_inner: str,
+    out_dir: str,
+) -> tuple:
+    """
+    Extract inner files from ZIP inputs to *out_dir* (persistent, not a temp dir).
+    If both paths point to the same ZIP, opens it only once.
+    Non-ZIP inputs are returned unchanged with no extraction.
+    Returns (left_file_path, right_file_path, list_of_extracted_paths).
+    """
+    os.makedirs(out_dir, exist_ok=True)
+    _supported = {".csv", ".tsv", ".txt", ".xlsx", ".xls", ".json", ".xml"}
+    left_is_zip  = _Path(left_path).suffix.lower()  == ".zip"
+    right_is_zip = _Path(right_path).suffix.lower() == ".zip"
+    same_zip     = (
+        left_is_zip and right_is_zip
+        and os.path.abspath(left_path) == os.path.abspath(right_path)
+    )
+    extracted: list = []
+
+    def _pull(zf, zip_path: str, inner: str) -> str:
+        if inner:
+            for member in zf.namelist():
+                if os.path.basename(member).lower() == inner.lower():
+                    dest = os.path.join(out_dir, os.path.basename(member))
+                    with zf.open(member) as src, open(dest, "wb") as dst:
+                        dst.write(src.read())
+                    return dest
+            raise ValueError(f"'{inner}' not found inside ZIP: {zip_path}")
+        for member in zf.namelist():
+            if _Path(member).suffix.lower() in _supported:
+                dest = os.path.join(out_dir, os.path.basename(member))
+                with zf.open(member) as src, open(dest, "wb") as dst:
+                    dst.write(src.read())
+                return dest
+        raise ValueError(f"No supported file found inside ZIP: {zip_path}")
+
+    if same_zip:
+        with _zipfile.ZipFile(left_path, "r") as zf:
+            lf = _pull(zf, left_path, left_inner)
+            extracted.append(lf)
+            if left_inner.lower() != right_inner.lower():
+                rf = _pull(zf, right_path, right_inner)
+                extracted.append(rf)
+            else:
+                rf = lf
+    else:
+        if left_is_zip:
+            with _zipfile.ZipFile(left_path, "r") as zf:
+                lf = _pull(zf, left_path, left_inner)
+            extracted.append(lf)
+        else:
+            lf = left_path
+        if right_is_zip:
+            with _zipfile.ZipFile(right_path, "r") as zf:
+                rf = _pull(zf, right_path, right_inner)
+            extracted.append(rf)
+        else:
+            rf = right_path
+
+    return lf, rf, extracted
+
+
 def preprocess(input_paths: list) -> list:
     """
     Flatten HEADER_FILENAME (master) + DETAIL_FILENAME (detail) into one wide file.
@@ -190,8 +256,13 @@ def preprocess(input_paths: list) -> list:
     Returns
     -------
     list[str]
-        List containing the absolute path to the flat output file.
+        Extracted input files + flat output file path.
     """
+    if isinstance(input_paths, str):
+        input_paths = [input_paths, input_paths]
+    elif isinstance(input_paths, list) and len(input_paths) == 1:
+        input_paths = [input_paths[0], input_paths[0]]
+
     if len(input_paths) < 2:
         raise ValueError(
             "file_denormalize requires exactly 2 input files: [header/master, detail]."
@@ -199,8 +270,12 @@ def preprocess(input_paths: list) -> list:
 
     header_path = _find_input_file(input_paths, HEADER_FILENAME, 0)
     detail_path = _find_input_file(input_paths, DETAIL_FILENAME, 1)
-    master = _apply_usecols(_load_file(header_path, LEFT_INNER_FILE),  LEFT_USECOLS)
-    detail = _apply_usecols(_load_file(detail_path, RIGHT_INNER_FILE), RIGHT_USECOLS)
+    _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_paths[0]))
+    header_file, detail_file, extracted_paths = _extract_from_zips(
+        header_path, detail_path, LEFT_INNER_FILE, RIGHT_INNER_FILE, _out_dir
+    )
+    master = _apply_usecols(_load_file(header_file), LEFT_USECOLS)
+    detail = _apply_usecols(_load_file(detail_file), RIGHT_USECOLS)
 
     # Resolve effective join key (LEFT_KEY/RIGHT_KEY override JOIN_KEY for mismatched names)
     left_key  = LEFT_KEY  if LEFT_KEY  else JOIN_KEY
@@ -243,6 +318,5 @@ def preprocess(input_paths: list) -> list:
     result = _drop_columns(result, OUTPUT_DROP_COLUMNS)
     result = _insert_column_after(result, INSERT_COLUMN, INSERT_AFTER_COLUMN)
 
-    _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_paths[0]))
     out_path = os.path.join(_out_dir, OUTPUT_FILENAME)
-    return [_write_output(result, out_path, OUTPUT_FORMAT)]
+    return extracted_paths + [_write_output(result, out_path, OUTPUT_FORMAT)]
