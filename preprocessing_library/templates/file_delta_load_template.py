@@ -187,10 +187,10 @@ def _extract_from_zips(
     out_dir: str,
 ) -> tuple:
     """
-    Extract inner files from ZIP inputs to *out_dir* (persistent, not a temp dir).
+    Extract ALL files from ZIP inputs to *out_dir* (persistent).
     If both paths point to the same ZIP, opens it only once.
     Non-ZIP inputs are returned unchanged with no extraction.
-    Returns (left_file_path, right_file_path, list_of_extracted_paths).
+    Returns (left_file_path, right_file_path, list_of_all_extracted_paths).
     """
     os.makedirs(out_dir, exist_ok=True)
     _supported = {".csv", ".tsv", ".txt", ".xlsx", ".xls", ".json", ".xml"}
@@ -200,49 +200,49 @@ def _extract_from_zips(
         left_is_zip and right_is_zip
         and os.path.abspath(left_path) == os.path.abspath(right_path)
     )
-    extracted: list = []
+    all_extracted: list = []
 
-    def _pull(zf, zip_path: str, inner: str) -> str:
-        if inner:
+    def _extract_zip_all(zip_path: str) -> dict:
+        """Extract every file in the ZIP to out_dir; return {lower_name: dest_path}."""
+        name_map: dict = {}
+        with _zipfile.ZipFile(zip_path, "r") as zf:
             for member in zf.namelist():
-                if os.path.basename(member).lower() == inner.lower():
-                    dest = os.path.join(out_dir, os.path.basename(member))
-                    with zf.open(member) as src, open(dest, "wb") as dst:
-                        dst.write(src.read())
-                    return dest
-            raise ValueError(f"'{inner}' not found inside ZIP: {zip_path}")
-        for member in zf.namelist():
-            if _Path(member).suffix.lower() in _supported:
-                dest = os.path.join(out_dir, os.path.basename(member))
+                fname = os.path.basename(member)
+                if not fname:
+                    continue
+                dest = os.path.join(out_dir, fname)
                 with zf.open(member) as src, open(dest, "wb") as dst:
                     dst.write(src.read())
-                return dest
+                all_extracted.append(dest)
+                name_map[fname.lower()] = dest
+        return name_map
+
+    def _pick(name_map: dict, inner: str, zip_path: str) -> str:
+        """Return path for *inner* from the extraction map, or first supported file."""
+        if inner:
+            if inner.lower() in name_map:
+                return name_map[inner.lower()]
+            raise ValueError(f"'{inner}' not found inside ZIP: {zip_path}")
+        for name, path in name_map.items():
+            if _Path(name).suffix.lower() in _supported:
+                return path
         raise ValueError(f"No supported file found inside ZIP: {zip_path}")
 
     if same_zip:
-        with _zipfile.ZipFile(left_path, "r") as zf:
-            lf = _pull(zf, left_path, left_inner)
-            extracted.append(lf)
-            if left_inner.lower() != right_inner.lower():
-                rf = _pull(zf, right_path, right_inner)
-                extracted.append(rf)
-            else:
-                rf = lf
+        name_map = _extract_zip_all(left_path)
+        lf = _pick(name_map, left_inner, left_path)
+        rf = _pick(name_map, right_inner, right_path)
     else:
         if left_is_zip:
-            with _zipfile.ZipFile(left_path, "r") as zf:
-                lf = _pull(zf, left_path, left_inner)
-            extracted.append(lf)
+            lf = _pick(_extract_zip_all(left_path), left_inner, left_path)
         else:
             lf = left_path
         if right_is_zip:
-            with _zipfile.ZipFile(right_path, "r") as zf:
-                rf = _pull(zf, right_path, right_inner)
-            extracted.append(rf)
+            rf = _pick(_extract_zip_all(right_path), right_inner, right_path)
         else:
             rf = right_path
 
-    return lf, rf, extracted
+    return lf, rf, all_extracted
 
 
 def preprocess(input_paths: list) -> list:

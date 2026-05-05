@@ -88,8 +88,9 @@ _TEMPLATE_CATEGORIES: dict[str, list[str]] = {
                        "file_split_columns","file_filter_by_values"],
     "Summarise":      ["file_aggregate","file_rank_filter","file_join_filter_agg"],
     "Track Changes":  ["file_delta_load"],
-    "ZIP Input":      ["file_zip_extract_join","file_join_two_zip","file_join_multi_key_zip",
-                       "file_denormalize_zip","file_delta_load_zip","file_join_filter_agg_zip"],
+    "ZIP Input":      ["file_zip_extract_join","file_union_zip","file_join_two_zip",
+                       "file_join_multi_key_zip","file_denormalize_zip",
+                       "file_delta_load_zip","file_join_filter_agg_zip"],
 }
 
 # Maps ZIP-variant catalog names → the real template file to use for generation
@@ -524,6 +525,21 @@ TEMPLATE_CATALOG: dict[str, dict] = {
     # ── ZIP Input Variants ──────────────────────────────────────────────────────
     # These reuse the same template .py files (via _ZIP_TEMPLATE_ALIASES) but
     # surface LEFT_INNER_FILE / RIGHT_INNER_FILE at the top of the params form.
+    "file_union_zip": {
+        "display_name": "PS-02Z — Union ZIP Files",
+        "description":  "Extract ALL files from one or more ZIPs, then vertically stack the named inner file from each ZIP into one consolidated output.",
+        "function_sig": "preprocess(input_paths: list) -> list",
+        "input_type":   "multi",
+        "parameters": [
+            {"name": "INNER_FILE",        "type": "str",  "default": "",             "help": "Filename to pick from each ZIP for union (e.g. data.csv). \"\" = first supported file."},
+            {"name": "OUTPUT_DIR",        "type": "str",  "default": "",             "help": "Directory to write the output file."},
+            {"name": "OUTPUT_FILENAME",   "type": "str",  "default": "union.csv",    "help": "Name of the output file."},
+            {"name": "OUTPUT_FORMAT",     "type": "str",  "default": "csv",          "help": "csv | xlsx | json | parquet | tsv"},
+            {"name": "ADD_SOURCE_TAG",    "type": "bool", "default": "True",         "help": "Add a column showing which file each row came from."},
+            {"name": "SOURCE_TAG_COLUMN", "type": "str",  "default": "_source_file", "help": "Name of the source-tag column."},
+        ],
+    },
+
     "file_join_two_zip": {
         "display_name": "Join Two ZIP Files",
         "description":  "Extract one named file from each of two ZIPs, then join them on a key column.",
@@ -727,6 +743,7 @@ _INPUT_FILE_CONFIG: dict[str, list[dict]] = {
     "file_join_filter_agg":   [{"label": "Left File",                    "key": "left_path"},
                                 {"label": "Right File",                   "key": "right_path"}],
     "file_zip_extract_join":   [{"label": "ZIP File (comma-separated if multiple)", "key": "input_paths", "multi": True}],
+    "file_union_zip":          [{"label": "ZIP Files (comma-separated paths)",      "key": "input_paths", "multi": True}],
     # ZIP variants — same slot structure as their originals
     "file_join_two_zip":        [{"label": "Left ZIP File",               "key": "left_path"},
                                  {"label": "Right ZIP File",              "key": "right_path"}],
