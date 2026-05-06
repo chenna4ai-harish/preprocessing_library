@@ -164,7 +164,7 @@ def _apply_null_strategy(df: pd.DataFrame, col: str, rule: dict) -> pd.DataFrame
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def preprocess(input_path: str) -> str:
+def preprocess(input_path: str) -> list:
     """
     Load *input_path*, replace NULL_VALUES string representations with pd.NA,
     write a null audit report, apply NULL_RULES, and write cleaned data.
@@ -213,4 +213,4 @@ def preprocess(input_path: str) -> str:
 
     _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_path))
     out_path = os.path.join(_out_dir, OUTPUT_FILENAME)
-    return _write_output(df, out_path, OUTPUT_FORMAT)
+    return [_write_output(df, out_path, OUTPUT_FORMAT)]

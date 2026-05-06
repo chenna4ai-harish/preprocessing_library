@@ -128,7 +128,7 @@ def _write_output(df: pd.DataFrame, out_path: str, fmt: str) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def preprocess(input_path: str) -> str:
+def preprocess(input_path: str) -> list:
     """
     Group *input_path* by GROUP_BY_COLUMNS and apply the aggregation functions
     defined in AGGREGATIONS.
@@ -183,4 +183,4 @@ def preprocess(input_path: str) -> str:
 
     _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_path))
     out_path = os.path.join(_out_dir, OUTPUT_FILENAME)
-    return _write_output(result, out_path, OUTPUT_FORMAT)
+    return [_write_output(result, out_path, OUTPUT_FORMAT)]

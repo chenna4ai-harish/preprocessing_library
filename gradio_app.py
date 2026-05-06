@@ -168,7 +168,7 @@ TEMPLATE_CATALOG: dict[str, dict] = {
     "file_detect_load": {
         "display_name": "PS-01 — Detect & Load",
         "description":  "Auto-detect file format and write a clean output file.",
-        "function_sig": "preprocess(input_path: str) -> str",
+        "function_sig": "preprocess(input_path: str) -> list",
         "input_type":   "single",
         "parameters": [
             {"name": "OUTPUT_DIR",            "type": "str", "default": "",    "help": "Directory to write the output file."},
@@ -183,7 +183,7 @@ TEMPLATE_CATALOG: dict[str, dict] = {
     "file_union": {
         "display_name": "PS-02 — File Union (Vertical Stack)",
         "description":  "Vertically stack multiple files. Handles column mismatches, optional source tagging.",
-        "function_sig": "preprocess(input_paths: list, output_columns=None) -> str",
+        "function_sig": "preprocess(input_paths: list, output_columns=None) -> list",
         "input_type":   "multi",
         "parameters": [
             {"name": "OUTPUT_DIR",        "type": "str",  "default": "",     "help": "Directory to write the output file."},
@@ -197,7 +197,7 @@ TEMPLATE_CATALOG: dict[str, dict] = {
     "file_join_two": {
         "display_name": "PS-03 — Join Two Files",
         "description":  "Join two files on a key column. Both files use the same key name by default; set LEFT_KEY / RIGHT_KEY to join on differently-named columns.",
-        "function_sig": "preprocess(input_paths: list) -> str",
+        "function_sig": "preprocess(input_paths: list) -> list",
         "input_type":   "two",
         "parameters": [
             {"name": "LEFT_USECOLS",      "type": "list", "default": "[]",       "help": "Columns to load from the left file. [] = all columns."},
@@ -224,7 +224,7 @@ TEMPLATE_CATALOG: dict[str, dict] = {
     "file_join_multi": {
         "display_name": "PS-04 — Join Multiple Files (Sequential)",
         "description":  "Join N files in sequence; each step has its own key, type, and suffixes.",
-        "function_sig": "preprocess(input_paths: list) -> str",
+        "function_sig": "preprocess(input_paths: list) -> list",
         "input_type":   "multi",
         "parameters": [
             {"name": "JOIN_STEPS", "type": "list_of_dicts",
@@ -239,7 +239,7 @@ TEMPLATE_CATALOG: dict[str, dict] = {
     "file_join_multi_key": {
         "display_name": "PS-05 — Join Two Files (Multi-Key)",
         "description":  "Join two files on multiple key columns simultaneously.",
-        "function_sig": "preprocess(input_paths: list) -> str",
+        "function_sig": "preprocess(input_paths: list) -> list",
         "input_type":   "two",
         "parameters": [
             {"name": "LEFT_USECOLS",       "type": "list", "default": "[]",      "help": "Columns to load from the left file. [] = all columns."},
@@ -269,7 +269,7 @@ TEMPLATE_CATALOG: dict[str, dict] = {
     "file_denormalize": {
         "display_name": "PS-06 — Denormalize (Header + Detail)",
         "description":  "Join a header file and a detail file; prefix all detail columns.",
-        "function_sig": "preprocess(input_paths: list) -> str",
+        "function_sig": "preprocess(input_paths: list) -> list",
         "input_type":   "two",
         "parameters": [
             {"name": "LEFT_USECOLS",       "type": "list", "default": "[]",        "help": "Columns to load from the header file. [] = all columns."},
@@ -297,7 +297,7 @@ TEMPLATE_CATALOG: dict[str, dict] = {
     "file_split_by_value": {
         "display_name": "PS-07 — Split by Column Value",
         "description":  "Split a file into one output file per unique value in a chosen column.",
-        "function_sig": "preprocess(input_path: str) -> str",
+        "function_sig": "preprocess(input_path: str) -> list",
         "input_type":   "single",
         "parameters": [
             {"name": "SPLIT_COLUMN",         "type": "str",  "default": "category", "help": "Column whose distinct values drive the split. ← pick from columns"},
@@ -311,7 +311,7 @@ TEMPLATE_CATALOG: dict[str, dict] = {
     "file_filter_to_files": {
         "display_name": "PS-08 — Filter Rows to Files (Query)",
         "description":  "Route rows to named output files using pandas query() expressions.",
-        "function_sig": "preprocess(input_path: str) -> str",
+        "function_sig": "preprocess(input_path: str) -> list",
         "input_type":   "single",
         "parameters": [
             {"name": "FILTER_RULES", "type": "list_of_dicts",
@@ -326,7 +326,7 @@ TEMPLATE_CATALOG: dict[str, dict] = {
     "file_split_columns": {
         "display_name": "PS-09 — Split Columns to Files",
         "description":  "Split a wide file into narrower files, each with a subset of columns.",
-        "function_sig": "preprocess(input_path: str) -> str",
+        "function_sig": "preprocess(input_path: str) -> list",
         "input_type":   "single",
         "parameters": [
             {"name": "COMMON_KEY_COLUMNS", "type": "list", "default": '["id"]',
@@ -342,7 +342,7 @@ TEMPLATE_CATALOG: dict[str, dict] = {
     "file_deduplicate": {
         "display_name": "PS-10 — Deduplicate",
         "description":  "Remove duplicate rows based on selected key columns.",
-        "function_sig": "preprocess(input_path: str) -> str",
+        "function_sig": "preprocess(input_path: str) -> list",
         "input_type":   "single",
         "parameters": [
             {"name": "KEY_COLUMNS",                "type": "list", "default": '["id"]',         "help": "Columns that define a duplicate. ← pick from columns"},
@@ -357,7 +357,7 @@ TEMPLATE_CATALOG: dict[str, dict] = {
     "file_rename_columns": {
         "display_name": "PS-11 — Rename Columns",
         "description":  "Rename columns via a mapping dict; optionally drop unmapped columns.",
-        "function_sig": "preprocess(input_path: str) -> str",
+        "function_sig": "preprocess(input_path: str) -> list",
         "input_type":   "single",
         "parameters": [
             {"name": "COLUMN_MAPPING",  "type": "dict", "default": '{"OldName": "NewName", "Col2": "Column2"}',
@@ -373,7 +373,7 @@ TEMPLATE_CATALOG: dict[str, dict] = {
     "file_handle_nulls": {
         "display_name": "PS-12 — Handle Nulls",
         "description":  "Audit and clean null values per column.",
-        "function_sig": "preprocess(input_path: str) -> str",
+        "function_sig": "preprocess(input_path: str) -> list",
         "input_type":   "single",
         "parameters": [
             {"name": "NULL_RULES", "type": "list_of_dicts",
@@ -391,7 +391,7 @@ TEMPLATE_CATALOG: dict[str, dict] = {
     "file_cast_types": {
         "display_name": "PS-13 — Cast Column Types",
         "description":  "Cast columns to string, integer, float, date, or boolean.",
-        "function_sig": "preprocess(input_path: str) -> str",
+        "function_sig": "preprocess(input_path: str) -> list",
         "input_type":   "single",
         "parameters": [
             {"name": "TYPE_RULES", "type": "list_of_dicts",
@@ -410,7 +410,7 @@ TEMPLATE_CATALOG: dict[str, dict] = {
     "file_aggregate": {
         "display_name": "PS-14 — Aggregate / Group-By",
         "description":  "Group rows by key columns and apply aggregate functions.",
-        "function_sig": "preprocess(input_path: str) -> str",
+        "function_sig": "preprocess(input_path: str) -> list",
         "input_type":   "single",
         "parameters": [
             {"name": "GROUP_BY_COLUMNS", "type": "list", "default": '["category"]',
@@ -427,7 +427,7 @@ TEMPLATE_CATALOG: dict[str, dict] = {
     "file_delta_load": {
         "display_name": "PS-15 — Delta Load (Change Detection)",
         "description":  "Compare new vs old file; tag rows NEW / CHANGED / DELETED.",
-        "function_sig": "preprocess(input_paths: list) -> str",
+        "function_sig": "preprocess(input_paths: list) -> list",
         "input_type":   "two",
         "parameters": [
             {"name": "LEFT_USECOLS",       "type": "list", "default": "[]",       "help": "Columns to load from the new (current) file. [] = all columns."},
@@ -450,7 +450,7 @@ TEMPLATE_CATALOG: dict[str, dict] = {
     "file_rank_filter": {
         "display_name": "PS-16 — Rank & Filter (Top-N per Group)",
         "description":  "Rank rows within groups, keep top-N, optionally write discarded rows.",
-        "function_sig": "preprocess(input_path: str) -> str",
+        "function_sig": "preprocess(input_path: str) -> list",
         "input_type":   "single",
         "parameters": [
             {"name": "PARTITION_BY",     "type": "list", "default": '["category"]',
@@ -471,7 +471,7 @@ TEMPLATE_CATALOG: dict[str, dict] = {
     "file_join_filter_agg": {
         "display_name": "PS-18 — Join, Filter & Aggregate",
         "description":  "Join two files → WHERE filter on joined result → group-by aggregate → optional ranking.",
-        "function_sig": "preprocess(input_paths: list) -> str",
+        "function_sig": "preprocess(input_paths: list) -> list",
         "input_type":   "two",
         "parameters": [
             {"name": "LEFT_USECOLS",       "type": "list", "default": "[]",      "help": "Columns to load from the left file. [] = all columns."},

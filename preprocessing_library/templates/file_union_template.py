@@ -142,6 +142,43 @@ def _write_output(df: pd.DataFrame, out_path: str, fmt: str) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+def _expand_zip_inputs(input_paths: list, tmp_dir: str) -> list:
+    """Extract ALL supported files from ZIPs to tmp_dir; pass plain files through.
+    Scans each path's base directory for neighbour ZIPs. Returns resolved paths."""
+    _supported = {".csv", ".tsv", ".txt", ".xlsx", ".xls", ".json", ".xml"}
+    _seen: dict = {}
+    _resolved: list = []
+
+    def _extract_one_zip(zip_path: str) -> None:
+        key = os.path.abspath(zip_path)
+        if key in _seen:
+            return
+        _seen[key] = True
+        with _zipfile.ZipFile(zip_path, "r") as z:
+            for name in z.namelist():
+                if _Path(name).suffix.lower() in _supported:
+                    dest = os.path.join(tmp_dir, os.path.basename(name))
+                    with z.open(name) as src, open(dest, "wb") as dst:
+                        dst.write(src.read())
+                    if dest not in _resolved:
+                        _resolved.append(dest)
+        for entry in os.scandir(os.path.dirname(os.path.abspath(zip_path))):
+            if entry.is_file() and entry.name.lower().endswith(".zip"):
+                _extract_one_zip(entry.path)
+
+    for p in input_paths:
+        if _Path(p).suffix.lower() == ".zip":
+            _extract_one_zip(p)
+        else:
+            if p not in _resolved:
+                _resolved.append(p)
+            for entry in os.scandir(os.path.dirname(os.path.abspath(p))):
+                if entry.is_file() and entry.name.lower().endswith(".zip"):
+                    _extract_one_zip(entry.path)
+
+    return _resolved
+
+
 def _dedup_column_names(cols: list[str]) -> list[str]:
     """Make column names unique by appending .1, .2, ... to duplicates."""
     seen: dict[str, int] = {}
@@ -310,7 +347,7 @@ def _union_align_columns(
     return [df.reindex(columns=ordered_cols) for df in normalized_frames]
 
 
-def preprocess(input_paths: list, output_columns=None) -> str:
+def preprocess(input_paths: list, output_columns=None) -> list:
     """
     Load all files in *input_paths*, optionally tag each row with its source
     filename, concatenate vertically, and write to OUTPUT_DIR/OUTPUT_FILENAME.
@@ -328,8 +365,15 @@ def preprocess(input_paths: list, output_columns=None) -> str:
     str
         Absolute path to the unified output file.
     """
+    if isinstance(input_paths, str):
+        input_paths = [p.strip() for p in input_paths.split(",") if p.strip()]
     if not input_paths:
         raise ValueError("input_paths is empty — at least one file is required.")
+
+    _orig_first = str(input_paths[0])
+    _tmp = _tempfile.TemporaryDirectory()
+    if any(_Path(str(p)).suffix.lower() == ".zip" for p in input_paths):
+        input_paths = _expand_zip_inputs([str(p) for p in input_paths], _tmp.name)
 
     resolved_paths = _resolve_input_paths(input_paths)
     canonical_cols = _coerce_output_columns(output_columns)
@@ -339,6 +383,7 @@ def preprocess(input_paths: list, output_columns=None) -> str:
         df = _load_file(path)
         df = _ensure_string_unique_columns(df)
         frames.append(df)
+    _tmp.cleanup()
 
     if canonical_cols:
         frames = _union_align_columns(frames, output_columns=canonical_cols)
@@ -359,6 +404,6 @@ def preprocess(input_paths: list, output_columns=None) -> str:
         frames = _union_align_columns(frames)
 
     combined = pd.concat(frames, ignore_index=True, sort=False)
-    _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_paths[0]))
+    _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(_orig_first))
     out_path = os.path.join(_out_dir, OUTPUT_FILENAME)
-    return _write_output(combined, out_path, OUTPUT_FORMAT)
+    return [_write_output(combined, out_path, OUTPUT_FORMAT)]

@@ -113,7 +113,7 @@ def _write_output(df: pd.DataFrame, out_path: str, fmt: str) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def preprocess(input_path: str) -> str:
+def preprocess(input_path: str) -> list:
     """
     Auto-detect the format of *input_path*, load into a DataFrame, and write
     a normalised output file to OUTPUT_DIR.
@@ -140,4 +140,4 @@ def preprocess(input_path: str) -> str:
     _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_path))
     out_path = os.path.join(_out_dir, output_filename)
 
-    return _write_output(df, out_path, OUTPUT_FORMAT)
+    return [_write_output(df, out_path, OUTPUT_FORMAT)]
