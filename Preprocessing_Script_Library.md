@@ -1,7 +1,7 @@
 # Data Preprocessing Script Library & Template Generator
 ### Comprehensive Technical Documentation
-**Version 1.2 | Generic | Domain-Agnostic**  
-**Generated: April 2026 | Updated: May 2026 | CONFIDENTIAL — INTERNAL USE ONLY**
+**Version 1.1 | Generic | Domain-Agnostic**  
+**Generated: April 2026 | Updated: April 2026 | CONFIDENTIAL — INTERNAL USE ONLY**
 
 ---
 
@@ -30,7 +30,6 @@
    - [PS-15 Incremental Delta Load](#ps-15-incremental--delta-load)
    - [PS-16 Rank Filter](#ps-16-rank-filter-window-rank-within-groups)
    - [PS-17 Filter by Value List](#ps-17-filter-by-value-list)
-   - [PS-18 Join, Filter & Aggregate](#ps-18-join-filter--aggregate)
 7. [Usage Examples](#7-usage-examples)
 8. [Supported File Formats](#8-supported-file-formats)
 9. [Output Structure](#9-output-structure)
@@ -133,7 +132,6 @@ Ingestion platform calls preprocess() on input files
 | PS-15 | `file_delta_load` | `preprocess(input_paths: list)` | Extract new/changed records only |
 | PS-16 | `file_rank_filter` | `preprocess(input_path: str)` | Rank rows within groups, keep top-N |
 | PS-17 | `file_filter_by_values` | `preprocess(input_path: str)` | Filter by value lists, remainder to others file |
-| PS-18 | `file_join_filter_agg` | `preprocess(input_paths: list) -> list` | Join → WHERE filter → group-by aggregate → (optional) rank |
 
 ---
 
@@ -248,21 +246,16 @@ Example: `file_split_by_value_20260429_143822.py`
 ```
 (repo root)/
 │
-├── gradio_app.py                 ← Gradio UI entry point (optional)
-├── app_history.py                ← SQLite-backed run history (prepkit_history.db)
-├── app_pipeline.py               ← Pipeline chaining executor (execs generated scripts)
-├── app_profile.py                ← Data profiling utilities (Tab 1)
-├── requirements.txt              ← Python package dependencies (pinned)
-├── tests/                        ← Unit + end-to-end tests (unittest)
-├── test_data/                    ← Sample input files (optional)
+├── gradio_app.py                 ← Optional Gradio UI entry point
+├── requirements.txt              ← Python package dependencies
 │
 └── preprocessing_library/
     │
-    ├── __init__.py                ← Package exports (generate_preprocessor, list_templates)
     ├── exceptions.py             ← Custom error types (TemplateNotFoundError etc.)
     ├── generator.py              ← Main generate_preprocessor() function
+    ├── template_catalog.json     ← Drives Gradio UI: display names, descriptions, parameter help
     │
-    ├── templates/                ← PS-01..PS-18 templates + ZIP helper templates
+    ├── templates/                ← 17 template files (one per scenario)
     │   ├── file_detect_load_template.py
     │   ├── file_union_template.py
     │   ├── file_join_two_template.py
@@ -279,12 +272,9 @@ Example: `file_split_by_value_20260429_143822.py`
     │   ├── file_aggregate_template.py
     │   ├── file_delta_load_template.py
     │   ├── file_rank_filter_template.py
-    │   ├── file_filter_by_values_template.py
-    │   ├── file_join_filter_agg_template.py
-    │   ├── file_union_zip_template.py
-    │   └── file_zip_extract_join_template.py
+    │   └── file_filter_by_values_template.py
     │
-    └── generated_scripts/        ← Default output folder for generated scripts
+    └── generated_scripts/        ← Output folder for all generated scripts
         └── *.py                  ← Generated preprocess() scripts land here
 ```
 
@@ -1175,63 +1165,6 @@ def preprocess(input_path: str) -> str:
 
 ---
 
-### PS-18: Join, Filter & Aggregate
-
-**Purpose:** Join two files → apply an optional `WHERE_CONDITION` on the joined result → group-by aggregate → optionally rank and keep top-N.
-
-**Template File:** `file_join_filter_agg_template.py`
-
-**Function Signature:**
-```python
-def preprocess(input_paths: list) -> list:
-```
-
-**Placeholders:**
-
-| Placeholder | Description | Example Value |
-|---|---|---|
-| `{{LEFT_FILENAME}}` | Basename of the left file (used to find the file inside `input_paths`) | `customers.csv` |
-| `{{RIGHT_FILENAME}}` | Basename of the right file | `invoices.csv` |
-| `{{LEFT_USECOLS}}` | List of columns to load from the left file (`[]` = all) | `["account_number","customer_name"]` |
-| `{{RIGHT_USECOLS}}` | List of columns to load from the right file (`[]` = all) | `["account_number","invoice_amount"]` |
-| `{{LEFT_INNER_FILE}}` | If left input is a ZIP: inner filename to use (`""` = first supported file) | `customers.csv` |
-| `{{RIGHT_INNER_FILE}}` | If right input is a ZIP: inner filename to use (`""` = first supported file) | `invoices.csv` |
-| `{{DEDUP_RIGHT_BY}}` | Deduplicate the right file by this column before joining (`""` = skip) | `invoice_number` |
-| `{{DEDUP_KEEP}}` | Which duplicate to keep when deduplicating | `first` |
-| `{{JOIN_KEYS}}` | List of join key columns (1+ keys) | `["account_number"]` |
-| `{{JOIN_TYPE}}` | Join type | `inner` |
-| `{{LEFT_SUFFIX}}` | Suffix for overlapping columns from the left file | `_left` |
-| `{{RIGHT_SUFFIX}}` | Suffix for overlapping columns from the right file | `_right` |
-| `{{WHERE_CONDITION}}` | Optional pandas `query()` expression on the joined dataframe (`""` = skip) | `invoice_amount > 1000` |
-| `{{GROUP_BY_COLUMNS}}` | List of columns to group by | `["account_number"]` |
-| `{{AGGREGATIONS}}` | List of aggregation dicts (see format below). Empty `[]` = row-count per group | see below |
-| `{{RANK_BY_COLUMN}}` | Column to rank by (`""` = skip ranking) | `total_amount` |
-| `{{RANK_ORDER}}` | Rank order | `desc` |
-| `{{RANK_COLUMN_NAME}}` | Name of the rank column written to output | `_rank` |
-| `{{KEEP_TOP_N}}` | Keep rows with rank <= N (0 = keep all) | `10` |
-| `{{OUTPUT_DROP_COLUMNS}}` | Columns to drop from the final result (`[]` = keep all) | `["debug_col"]` |
-| `{{INSERT_COLUMN}}` | Reposition this column after `INSERT_AFTER_COLUMN` (`""` = skip) | `total_amount` |
-| `{{INSERT_AFTER_COLUMN}}` | Anchor column for `INSERT_COLUMN` repositioning | `account_number` |
-| `{{OUTPUT_DIR}}` | Output directory (`""` = write next to the first input file) | `./output` |
-| `{{OUTPUT_FILENAME}}` | Output filename | `ps18_join_filter_agg.csv` |
-| `{{OUTPUT_FORMAT}}` | Output format | `csv` |
-
-**AGGREGATIONS Format:**
-```python
-[
-  {"column": "*",              "function": "count",  "output_column": "_row_count"},
-  {"column": "invoice_amount", "function": "sum",    "output_column": "total_amount"},
-  {"column": "invoice_number", "function": "nunique","output_column": "unique_invoices"},
-]
-```
-
-**Return Value:**
-- Returns a `list[str]` containing any extracted input files (when inputs are ZIPs) plus the output file path as the last element.
-
-**Output:** Final aggregated (and optionally ranked) file at `OUTPUT_DIR/OUTPUT_FILENAME` (or next to the input file if `OUTPUT_DIR = ""`).
-
----
-
 ## 7. Usage Examples
 
 ### 7.1 Generate a Column-Value Split Script
@@ -1527,7 +1460,7 @@ The platform dynamically loads and calls `preprocess()` from the configured scri
 This repo includes an optional Gradio front-end that allows users to:
 
 1. Select a preprocessing template from a dropdown
-2. Read the template title, description, and per-parameter help text (driven by `TEMPLATE_CATALOG` in `gradio_app.py`)
+2. Read the template title, description, and per-parameter help text (driven by `template_catalog.json`)
 3. Enter parameters as a JSON object
 4. Click **Generate** to produce and download the corresponding `preprocess()` Python script
 
@@ -1536,10 +1469,7 @@ This repo includes an optional Gradio front-end that allows users to:
 | File | Purpose |
 |---|---|
 | `gradio_app.py` | Gradio app — run this to start the UI |
-| `gradio_app.py` (`TEMPLATE_CATALOG`) | Template metadata: display names, descriptions, parameter help |
-| `app_profile.py` | Data profiling utilities for Tab 1 |
-| `app_history.py` | SQLite-backed run history (`prepkit_history.db`) |
-| `app_pipeline.py` | Pipeline chaining executor |
+| `preprocessing_library/template_catalog.json` | Drives all UI content: display names, descriptions, parameter metadata |
 
 ### 11.2 Run Instructions
 
@@ -1555,34 +1485,24 @@ Run the UI from the repo root:
 python gradio_app.py
 ```
 
-The app starts on `http://127.0.0.1:7862` by default (override with `--host` / `--port`).
+The app starts on `http://localhost:7860` by default.
 
 ### 11.3 requirements.txt
 
 ```
-gradio==6.3.0
-
-# Gradio internals (pinned for compatibility)
-fastapi==0.128.0
-uvicorn==0.40.0
-starlette==0.50.0
-httpx==0.28.1
-anyio==4.10.0
-
-# Data processing
-pandas==2.2.3
-numpy==2.2.6
-openpyxl==3.1.5        # .xlsx support
-xlrd==2.0.2            # .xls (old Excel) support
-pyarrow==21.0.0        # .parquet support
+pandas>=2.0.0
+openpyxl>=3.1.0
+xlrd>=2.0.1
+lxml>=4.9.0
+gradio>=4.0.0
 ```
 
 > **Note:** `xlrd` only supports `.xls` (legacy Excel). For `.xlsx` use `openpyxl`.  
 > `lxml` is optional — the XML loader falls back to the stdlib `xml.etree.ElementTree` if not installed.
 
-### 11.4 TEMPLATE_CATALOG — Schema & Format
+### 11.4 template_catalog.json — Schema & Format
 
-`TEMPLATE_CATALOG` (in `gradio_app.py`) is a Python dict. Each entry describes one template and drives what the UI displays for that template. When you add a new template, add a matching entry here.
+`template_catalog.json` is a JSON array. Each entry describes one template and drives what the UI displays for that template. When you add a new template, add a matching entry here.
 
 **Full schema for one entry:**
 
@@ -1721,11 +1641,11 @@ The UI accepts parameters as a **JSON object**. For list/dict placeholders (e.g.
 
 When a template is modified or a new template is added:
 
-1. Update or add the corresponding entry in `TEMPLATE_CATALOG` (in `gradio_app.py`)
+1. Update or add the corresponding entry in `template_catalog.json`
 2. Ensure `parameters[].name` matches every `{{PLACEHOLDER}}` in the template exactly
-3. Restart `gradio_app.py` — it reads `TEMPLATE_CATALOG` at startup
+3. Restart `gradio_app.py` — it reads `template_catalog.json` at startup
 
 > The UI only **generates** scripts. Running a generated script still requires runtime dependencies (`pandas`, `openpyxl`, etc.) to be installed in the execution environment.
 
-*End of Documentation — Data Preprocessing Script Library v1.2*  
-*v1.2 changes: PS-18 Join/Filter/Aggregate, updated directory structure, updated Gradio UI docs (TEMPLATE_CATALOG in gradio_app.py), updated requirements pins and default port.*
+*End of Documentation — Data Preprocessing Script Library v1.1*  
+*v1.1 changes: PS-16 Rank Filter, PS-17 Filter by Value List, PS-02 folder-input + output_columns, Gradio UI section, template_catalog.json schema, requirements.txt, corrected directory structure and XLSX note*
