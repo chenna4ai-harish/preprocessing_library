@@ -159,6 +159,13 @@ def _extract_from_zips(input_paths, out_dir):
 
 
 def preprocess(input_paths: list) -> list:
+    if isinstance(input_paths, str):
+        if "," in input_paths:
+            input_paths = [p.strip() for p in input_paths.split(",")]
+        else:
+            input_paths = [input_paths, input_paths]
+    if isinstance(input_paths, list) and len(input_paths) == 1:
+        input_paths = [input_paths[0], input_paths[0]]
     if len(input_paths) < 2:
         raise ValueError("file_denormalize_zip requires 2 input files.")
 
