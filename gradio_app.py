@@ -84,7 +84,7 @@ _TEMPLATE_CATEGORIES: dict[str, list[str]] = {
                        "file_zip_extract_join"],
     "Clean Data":     ["file_deduplicate","file_rename_columns",
                        "file_handle_nulls","file_cast_types"],
-    "Split / Filter": ["file_column_split","file_filter_to_files","file_split_columns"],
+    "Split / Filter": ["file_split_by_value","file_column_split","file_filter_to_files","file_split_columns"],
     "Summarise":      ["file_aggregate","file_rank_filter","file_join_filter_agg"],
     "Track Changes":  ["file_delta_load"],
     "ZIP Input":      ["file_zip_extract_join","file_union_zip","file_column_split_zip",
@@ -291,6 +291,20 @@ TEMPLATE_CATALOG: dict[str, dict] = {
             {"name": "OUTPUT_DIR",         "type": "str",  "default": "",          "help": "Directory to write the output file."},
             {"name": "OUTPUT_FILENAME",    "type": "str",  "default": "denormalized.csv","help": "Name of the output file."},
             {"name": "OUTPUT_FORMAT",      "type": "str",  "default": "csv",       "help": "csv | xlsx | json | parquet | tsv"},
+        ],
+    },
+
+    "file_split_by_value": {
+        "display_name": "PS-07 — Split by Column Value",
+        "description":  "Split a file into one output file per unique value in a chosen column.",
+        "function_sig": "preprocess(input_path: str) -> str",
+        "input_type":   "single",
+        "parameters": [
+            {"name": "SPLIT_COLUMN",         "type": "str",  "default": "category", "help": "Column whose distinct values drive the split. ← pick from columns"},
+            {"name": "FILENAME_TEMPLATE",    "type": "str",  "default": "{value}.csv","help": "Output filename pattern — {value} is replaced by the column value."},
+            {"name": "INCLUDE_SPLIT_COLUMN", "type": "bool", "default": "True",      "help": "Keep the split column in output files."},
+            {"name": "OUTPUT_DIR",           "type": "str",  "default": "",          "help": "Directory to write split files."},
+            {"name": "OUTPUT_FORMAT",        "type": "str",  "default": "csv",       "help": "csv | xlsx | json | parquet | tsv"},
         ],
     },
 
@@ -764,6 +778,7 @@ _INPUT_FILE_CONFIG: dict[str, list[dict]] = {
                              {"label": "Right File",                   "key": "right_path"}],
     "file_denormalize":     [{"label": "Header File",                  "key": "header_path"},
                              {"label": "Detail File",                  "key": "detail_path"}],
+    "file_split_by_value":  [{"label": "Input File",                   "key": "input_path"}],
     "file_column_split":    [{"label": "Input File",                   "key": "input_path"}],
     "file_filter_to_files": [{"label": "Input File",                   "key": "input_path"}],
     "file_split_columns":   [{"label": "Input File",                   "key": "input_path"}],
