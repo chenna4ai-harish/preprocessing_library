@@ -5,7 +5,7 @@ Purpose  : Join two files → apply WHERE filter on joined result →
            group-by aggregate (count / sum / mean / etc.) →
            optionally rank the aggregated rows and keep top-N.
 
-Contract : preprocess(input_paths: list) -> str
+Contract : preprocess(input_paths: list) -> list
 
 Steps
 -----
@@ -141,14 +141,14 @@ def _load_zip(file_path: str, inner_name: str = "") -> pd.DataFrame:
             for name in names:
                 if os.path.basename(name).lower() == inner_name.lower():
                     with _tempfile.TemporaryDirectory() as tmp_dir:
-                        z.extract(name, tmp_dir)
-                        return _load_file(os.path.join(tmp_dir, name))
+                        extracted = z.extract(name, tmp_dir)
+                        return _load_file(extracted)
             raise ValueError(f"'{inner_name}' not found inside ZIP: {file_path}")
         for name in names:
             if _Path(name).suffix.lower() in _supported:
                 with _tempfile.TemporaryDirectory() as tmp_dir:
-                    z.extract(name, tmp_dir)
-                    return _load_file(os.path.join(tmp_dir, name))
+                    extracted = z.extract(name, tmp_dir)
+                    return _load_file(extracted)
     raise ValueError(f"No loadable file found inside ZIP: {file_path}")
 
 
@@ -262,7 +262,113 @@ def _apply_aggregations(df: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
-def preprocess(input_paths: list) -> str:
+def _extract_from_zips(
+    left_path: str,
+    right_path: str,
+    left_inner: str,
+    right_inner: str,
+    out_dir: str,
+) -> tuple:
+    """
+    Extract ALL files from ZIP inputs to *out_dir* (persistent).
+    If both paths point to the same ZIP, opens it only once.
+    Non-ZIP inputs are copied to *out_dir* so every input file is present there.
+    Returns (left_file_path, right_file_path, list_of_all_extracted_paths).
+    """
+    os.makedirs(out_dir, exist_ok=True)
+    _supported = {".csv", ".tsv", ".txt", ".xlsx", ".xls", ".json", ".xml"}
+    left_is_zip  = _Path(left_path).suffix.lower()  == ".zip"
+    right_is_zip = _Path(right_path).suffix.lower() == ".zip"
+    same_zip     = (
+        left_is_zip and right_is_zip
+        and os.path.abspath(left_path) == os.path.abspath(right_path)
+    )
+    all_extracted: list = []
+
+    # ── Scan base directories for any additional ZIPs ─────────────────────
+    _input_abs = {os.path.abspath(left_path), os.path.abspath(right_path)}
+    _scanned_dirs: set = set()
+    for _p in (left_path, right_path):
+        _base = str(_Path(_p).parent)
+        if _base in _scanned_dirs:
+            continue
+        _scanned_dirs.add(_base)
+        try:
+            for _fname in os.listdir(_base):
+                if not _fname.lower().endswith(".zip"):
+                    continue
+                _zip_full = os.path.join(_base, _fname)
+                if os.path.abspath(_zip_full) in _input_abs:
+                    continue  # handled below
+                try:
+                    with _zipfile.ZipFile(_zip_full, "r") as _zf:
+                        for _member in _zf.namelist():
+                            _mname = os.path.basename(_member)
+                            if not _mname:
+                                continue
+                            _dest = os.path.join(out_dir, _mname)
+                            with _zf.open(_member) as _s, open(_dest, "wb") as _d:
+                                _d.write(_s.read())
+                            all_extracted.append(_dest)
+                except _zipfile.BadZipFile:
+                    pass
+        except OSError:
+            pass
+
+    def _extract_zip_all(zip_path: str) -> dict:
+        """Extract every file in the ZIP to out_dir; return {lower_name: dest_path}."""
+        name_map: dict = {}
+        with _zipfile.ZipFile(zip_path, "r") as zf:
+            for member in zf.namelist():
+                fname = os.path.basename(member)
+                if not fname:
+                    continue
+                dest = os.path.join(out_dir, fname)
+                with zf.open(member) as src, open(dest, "wb") as dst:
+                    dst.write(src.read())
+                all_extracted.append(dest)
+                name_map[fname.lower()] = dest
+        return name_map
+
+    def _pick(name_map: dict, inner: str, zip_path: str) -> str:
+        """Return path for *inner* from the extraction map, or first supported file."""
+        if inner:
+            if inner.lower() in name_map:
+                return name_map[inner.lower()]
+            raise ValueError(f"'{inner}' not found inside ZIP: {zip_path}")
+        for name, path in name_map.items():
+            if _Path(name).suffix.lower() in _supported:
+                return path
+        raise ValueError(f"No supported file found inside ZIP: {zip_path}")
+
+    if same_zip:
+        name_map = _extract_zip_all(left_path)
+        lf = _pick(name_map, left_inner, left_path)
+        rf = _pick(name_map, right_inner, right_path)
+    else:
+        if left_is_zip:
+            lf = _pick(_extract_zip_all(left_path), left_inner, left_path)
+        else:
+            _dest = os.path.join(out_dir, os.path.basename(left_path))
+            if os.path.abspath(left_path) != os.path.abspath(_dest):
+                with open(left_path, "rb") as _s, open(_dest, "wb") as _d:
+                    _d.write(_s.read())
+            all_extracted.append(_dest)
+            lf = _dest
+        if right_is_zip:
+            rf = _pick(_extract_zip_all(right_path), right_inner, right_path)
+        else:
+            _dest = os.path.join(out_dir, os.path.basename(right_path))
+            if os.path.abspath(right_path) != os.path.abspath(_dest):
+                with open(right_path, "rb") as _s, open(_dest, "wb") as _d:
+                    _d.write(_s.read())
+            all_extracted.append(_dest)
+            rf = _dest
+
+    return lf, rf, all_extracted
+
+
+def preprocess(input_paths: list) -> list:
     """
     Join LEFT_FILENAME + RIGHT_FILENAME, filter, aggregate, rank, write output.
 
@@ -274,9 +380,14 @@ def preprocess(input_paths: list) -> str:
 
     Returns
     -------
-    str
-        Absolute path to the output file.
+    list[str]
+        Extracted input files + output file path.
     """
+    if isinstance(input_paths, str):
+        input_paths = [input_paths, input_paths]
+    elif isinstance(input_paths, list) and len(input_paths) == 1:
+        input_paths = [input_paths[0], input_paths[0]]
+
     if len(input_paths) < 2:
         raise ValueError(
             f"file_join_filter_agg requires exactly 2 input files; got {len(input_paths)}."
@@ -285,8 +396,12 @@ def preprocess(input_paths: list) -> str:
     # ── Step 1: Load files by name ────────────────────────────────────────
     left_path  = _find_input_file(input_paths, LEFT_FILENAME,  0)
     right_path = _find_input_file(input_paths, RIGHT_FILENAME, 1)
-    left  = _apply_usecols(_load_file(left_path,  LEFT_INNER_FILE),  LEFT_USECOLS)
-    right = _apply_usecols(_load_file(right_path, RIGHT_INNER_FILE), RIGHT_USECOLS)
+    _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_paths[0]))
+    left_file, right_file, extracted_paths = _extract_from_zips(
+        left_path, right_path, LEFT_INNER_FILE, RIGHT_INNER_FILE, _out_dir
+    )
+    left  = _apply_usecols(_load_file(left_file),  LEFT_USECOLS)
+    right = _apply_usecols(_load_file(right_file), RIGHT_USECOLS)
 
     if DEDUP_RIGHT_BY and DEDUP_RIGHT_BY in right.columns:
         right = right.drop_duplicates(subset=DEDUP_RIGHT_BY, keep=DEDUP_KEEP or "first")
@@ -338,6 +453,5 @@ def preprocess(input_paths: list) -> str:
     result = _drop_columns(result, OUTPUT_DROP_COLUMNS)
     result = _insert_column_after(result, INSERT_COLUMN, INSERT_AFTER_COLUMN)
 
-    _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_paths[0]))
     out_path = os.path.join(_out_dir, OUTPUT_FILENAME)
-    return _write_output(result, out_path, OUTPUT_FORMAT)
+    return extracted_paths + [_write_output(result, out_path, OUTPUT_FORMAT)]

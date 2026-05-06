@@ -87,9 +87,9 @@ _TEMPLATE_CATEGORIES: dict[str, list[str]] = {
     "Split / Filter": ["file_column_split","file_filter_to_files","file_split_columns"],
     "Summarise":      ["file_aggregate","file_rank_filter","file_join_filter_agg"],
     "Track Changes":  ["file_delta_load"],
-    "ZIP Input":      ["file_zip_extract_join","file_union_zip","file_column_split_zip",
-                       "file_join_two_zip","file_join_multi_key_zip",
-                       "file_denormalize_zip","file_delta_load_zip","file_join_filter_agg_zip"],
+    "ZIP Input":      ["file_zip_extract_join","file_union_zip","file_join_two_zip",
+                       "file_join_multi_key_zip","file_denormalize_zip",
+                       "file_delta_load_zip","file_join_filter_agg_zip"],
 }
 
 # Maps ZIP-variant catalog names → the real template file to use for generation
@@ -197,7 +197,7 @@ TEMPLATE_CATALOG: dict[str, dict] = {
     "file_join_two": {
         "display_name": "PS-03 — Join Two Files",
         "description":  "Join two files on a key column. Both files use the same key name by default; set LEFT_KEY / RIGHT_KEY to join on differently-named columns.",
-        "function_sig": "preprocess(input_paths: list) -> str",
+        "function_sig": "preprocess(input_paths: list) -> list",
         "input_type":   "two",
         "parameters": [
             {"name": "LEFT_USECOLS",      "type": "list", "default": "[]",       "help": "Columns to load from the left file. [] = all columns."},
@@ -239,7 +239,7 @@ TEMPLATE_CATALOG: dict[str, dict] = {
     "file_join_multi_key": {
         "display_name": "PS-05 — Join Two Files (Multi-Key)",
         "description":  "Join two files on multiple key columns simultaneously.",
-        "function_sig": "preprocess(input_paths: list) -> str",
+        "function_sig": "preprocess(input_paths: list) -> list",
         "input_type":   "two",
         "parameters": [
             {"name": "LEFT_USECOLS",       "type": "list", "default": "[]",      "help": "Columns to load from the left file. [] = all columns."},
@@ -269,7 +269,7 @@ TEMPLATE_CATALOG: dict[str, dict] = {
     "file_denormalize": {
         "display_name": "PS-06 — Denormalize (Header + Detail)",
         "description":  "Join a header file and a detail file; prefix all detail columns.",
-        "function_sig": "preprocess(input_paths: list) -> str",
+        "function_sig": "preprocess(input_paths: list) -> list",
         "input_type":   "two",
         "parameters": [
             {"name": "LEFT_USECOLS",       "type": "list", "default": "[]",        "help": "Columns to load from the header file. [] = all columns."},
@@ -413,7 +413,7 @@ TEMPLATE_CATALOG: dict[str, dict] = {
     "file_delta_load": {
         "display_name": "PS-15 — Delta Load (Change Detection)",
         "description":  "Compare new vs old file; tag rows NEW / CHANGED / DELETED.",
-        "function_sig": "preprocess(input_paths: list) -> str",
+        "function_sig": "preprocess(input_paths: list) -> list",
         "input_type":   "two",
         "parameters": [
             {"name": "LEFT_USECOLS",       "type": "list", "default": "[]",       "help": "Columns to load from the new (current) file. [] = all columns."},
@@ -487,7 +487,7 @@ TEMPLATE_CATALOG: dict[str, dict] = {
     "file_join_filter_agg": {
         "display_name": "PS-18 — Join, Filter & Aggregate",
         "description":  "Join two files → WHERE filter on joined result → group-by aggregate → optional ranking.",
-        "function_sig": "preprocess(input_paths: list) -> str",
+        "function_sig": "preprocess(input_paths: list) -> list",
         "input_type":   "two",
         "parameters": [
             {"name": "LEFT_USECOLS",       "type": "list", "default": "[]",      "help": "Columns to load from the left file. [] = all columns."},
@@ -538,42 +538,10 @@ TEMPLATE_CATALOG: dict[str, dict] = {
         ],
     },
 
-    "file_column_split_zip": {
-        "display_name": "PS-19Z — Column Value Split from ZIP",
-        "description":  "Extract ALL files from a ZIP, then split the named inner file into multiple output files based on column values.",
-        "function_sig": "preprocess(input_paths: list) -> list",
-        "input_type":   "single",
-        "parameters": [
-            {"name": "INNER_FILE",         "type": "str",  "default": "",
-             "help": "File to process inside the ZIP (e.g. data.csv). \"\" = first supported file."},
-            {"name": "SPLIT_COLUMN",       "type": "str",  "default": "category",
-             "help": "Column whose values drive the split. ← pick from columns"},
-            {"name": "GROUPS", "type": "list_of_dicts",
-             "default": '[{"label": "group1", "values": ["A", "B"], "output_filename": "group1.csv"}, {"label": "group2", "values": ["C"], "output_filename": "group2.csv"}]',
-             "help": 'Groups (first-match-wins): [{"label":"name","values":["V1","V2"],"output_filename":"out.csv"}]'},
-            {"name": "CASE_SENSITIVE",     "type": "bool", "default": "False",
-             "help": "False = case-insensitive value matching."},
-            {"name": "INCLUDE_SPLIT_COLUMN","type": "bool","default": "True",
-             "help": "Keep the split column in output files."},
-            {"name": "NULL_HANDLING",      "type": "str",  "default": "merge_into_remaining",
-             "help": "separate_file | merge_into_group:<label> | merge_into_remaining | ignore"},
-            {"name": "NULL_FILENAME",      "type": "str",  "default": "nulls.csv",
-             "help": "Output file for null rows (used when NULL_HANDLING = separate_file)."},
-            {"name": "REMAINING_HANDLING", "type": "str",  "default": "separate_file",
-             "help": "separate_file | merge_into_group:<label> | ignore"},
-            {"name": "REMAINING_FILENAME", "type": "str",  "default": "remaining.csv",
-             "help": "Output file for unmatched rows (used when REMAINING_HANDLING = separate_file)."},
-            {"name": "OUTPUT_DIR",         "type": "str",  "default": "",
-             "help": "Directory to write output files."},
-            {"name": "OUTPUT_FORMAT",      "type": "str",  "default": "csv",
-             "help": "csv | xlsx | json | parquet | tsv"},
-        ],
-    },
-
     "file_join_two_zip": {
         "display_name": "Join Two ZIP Files",
         "description":  "Extract one named file from each of two ZIPs, then join them on a key column.",
-        "function_sig": "preprocess(input_paths: list) -> str",
+        "function_sig": "preprocess(input_paths: list) -> list",
         "input_type":   "two",
         "parameters": [
             {"name": "LEFT_INNER_FILE",    "type": "str",  "default": "",          "help": "File to extract from the Left ZIP (e.g. customers.csv). Required."},
@@ -600,7 +568,7 @@ TEMPLATE_CATALOG: dict[str, dict] = {
     "file_join_multi_key_zip": {
         "display_name": "Join Two ZIP Files (Multi-Key)",
         "description":  "Extract one named file from each of two ZIPs, then join on multiple key columns.",
-        "function_sig": "preprocess(input_paths: list) -> str",
+        "function_sig": "preprocess(input_paths: list) -> list",
         "input_type":   "two",
         "parameters": [
             {"name": "LEFT_INNER_FILE",    "type": "str",  "default": "",                 "help": "File to extract from the Left ZIP (e.g. customers.csv). Required."},
@@ -627,7 +595,7 @@ TEMPLATE_CATALOG: dict[str, dict] = {
     "file_denormalize_zip": {
         "display_name": "Denormalize ZIP Files (Header + Detail)",
         "description":  "Extract a header file and detail file from two ZIPs, then flatten into a single wide file.",
-        "function_sig": "preprocess(input_paths: list) -> str",
+        "function_sig": "preprocess(input_paths: list) -> list",
         "input_type":   "two",
         "parameters": [
             {"name": "LEFT_INNER_FILE",    "type": "str",  "default": "",               "help": "File to extract from the Header ZIP. Required."},
@@ -655,7 +623,7 @@ TEMPLATE_CATALOG: dict[str, dict] = {
     "file_delta_load_zip": {
         "display_name": "Delta Load from ZIP Files",
         "description":  "Extract current and baseline files from two ZIPs, then tag rows as NEW / CHANGED / DELETED.",
-        "function_sig": "preprocess(input_paths: list) -> str",
+        "function_sig": "preprocess(input_paths: list) -> list",
         "input_type":   "two",
         "parameters": [
             {"name": "LEFT_INNER_FILE",    "type": "str",  "default": "",            "help": "File to extract from the New/Current ZIP. Required."},
@@ -678,7 +646,7 @@ TEMPLATE_CATALOG: dict[str, dict] = {
     "file_join_filter_agg_zip": {
         "display_name": "Join ZIP Files, Filter & Aggregate",
         "description":  "Extract one file from each of two ZIPs, join them, apply WHERE filter, group-by aggregate, optional ranking.",
-        "function_sig": "preprocess(input_paths: list) -> str",
+        "function_sig": "preprocess(input_paths: list) -> list",
         "input_type":   "two",
         "parameters": [
             {"name": "LEFT_INNER_FILE",    "type": "str",  "default": "",             "help": "File to extract from the Left ZIP. Required."},
@@ -3022,7 +2990,7 @@ def build_ui() -> gr.Blocks:
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Preprocessing Script Library — Gradio UI")
-    parser.add_argument("--port",  type=int, default=7864)
+    parser.add_argument("--port",  type=int, default=7862)
     parser.add_argument("--host",  type=str, default="127.0.0.1")
     parser.add_argument("--share", action="store_true")
     args = parser.parse_args()

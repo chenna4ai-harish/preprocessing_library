@@ -28,6 +28,7 @@ flagged/
 
 # ── Generated scripts & output ────────────────────────────────────────────────
 preprocessing_library/generated_scripts/
+prepkit_history.db
 test_output/
 output/
 *.zip
