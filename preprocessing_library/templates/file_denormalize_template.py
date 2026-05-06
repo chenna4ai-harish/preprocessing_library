@@ -5,7 +5,7 @@ Purpose  : Flatten a normalised master-detail relationship into a single wide fi
            input_paths[0] = master file  (e.g. customers)
            input_paths[1] = detail file  (e.g. invoices)
            All detail columns (except JOIN_KEY) are prefixed with DETAIL_PREFIX.
-Contract : preprocess(input_paths: list) -> list
+Contract : preprocess(input_paths: list) -> str
 """
 from __future__ import annotations
 
@@ -111,14 +111,14 @@ def _load_zip(file_path: str, inner_name: str = "") -> pd.DataFrame:
             for name in names:
                 if os.path.basename(name).lower() == inner_name.lower():
                     with _tempfile.TemporaryDirectory() as tmp_dir:
-                        extracted = z.extract(name, tmp_dir)
-                        return _load_file(extracted)
+                        z.extract(name, tmp_dir)
+                        return _load_file(os.path.join(tmp_dir, name))
             raise ValueError(f"'{inner_name}' not found inside ZIP: {file_path}")
         for name in names:
             if _Path(name).suffix.lower() in _supported:
                 with _tempfile.TemporaryDirectory() as tmp_dir:
-                    extracted = z.extract(name, tmp_dir)
-                    return _load_file(extracted)
+                    z.extract(name, tmp_dir)
+                    return _load_file(os.path.join(tmp_dir, name))
     raise ValueError(f"No loadable file found inside ZIP: {file_path}")
 
 
@@ -175,113 +175,7 @@ def _insert_column_after(df: pd.DataFrame, col: str, after: str) -> pd.DataFrame
     return df[cols]
 
 
-def _extract_from_zips(
-    left_path: str,
-    right_path: str,
-    left_inner: str,
-    right_inner: str,
-    out_dir: str,
-) -> tuple:
-    """
-    Extract ALL files from ZIP inputs to *out_dir* (persistent).
-    If both paths point to the same ZIP, opens it only once.
-    Non-ZIP inputs are copied to *out_dir* so every input file is present there.
-    Returns (left_file_path, right_file_path, list_of_all_extracted_paths).
-    """
-    os.makedirs(out_dir, exist_ok=True)
-    _supported = {".csv", ".tsv", ".txt", ".xlsx", ".xls", ".json", ".xml"}
-    left_is_zip  = _Path(left_path).suffix.lower()  == ".zip"
-    right_is_zip = _Path(right_path).suffix.lower() == ".zip"
-    same_zip     = (
-        left_is_zip and right_is_zip
-        and os.path.abspath(left_path) == os.path.abspath(right_path)
-    )
-    all_extracted: list = []
-
-    # ── Scan base directories for any additional ZIPs ─────────────────────
-    _input_abs = {os.path.abspath(left_path), os.path.abspath(right_path)}
-    _scanned_dirs: set = set()
-    for _p in (left_path, right_path):
-        _base = str(_Path(_p).parent)
-        if _base in _scanned_dirs:
-            continue
-        _scanned_dirs.add(_base)
-        try:
-            for _fname in os.listdir(_base):
-                if not _fname.lower().endswith(".zip"):
-                    continue
-                _zip_full = os.path.join(_base, _fname)
-                if os.path.abspath(_zip_full) in _input_abs:
-                    continue  # handled below
-                try:
-                    with _zipfile.ZipFile(_zip_full, "r") as _zf:
-                        for _member in _zf.namelist():
-                            _mname = os.path.basename(_member)
-                            if not _mname:
-                                continue
-                            _dest = os.path.join(out_dir, _mname)
-                            with _zf.open(_member) as _s, open(_dest, "wb") as _d:
-                                _d.write(_s.read())
-                            all_extracted.append(_dest)
-                except _zipfile.BadZipFile:
-                    pass
-        except OSError:
-            pass
-
-    def _extract_zip_all(zip_path: str) -> dict:
-        """Extract every file in the ZIP to out_dir; return {lower_name: dest_path}."""
-        name_map: dict = {}
-        with _zipfile.ZipFile(zip_path, "r") as zf:
-            for member in zf.namelist():
-                fname = os.path.basename(member)
-                if not fname:
-                    continue
-                dest = os.path.join(out_dir, fname)
-                with zf.open(member) as src, open(dest, "wb") as dst:
-                    dst.write(src.read())
-                all_extracted.append(dest)
-                name_map[fname.lower()] = dest
-        return name_map
-
-    def _pick(name_map: dict, inner: str, zip_path: str) -> str:
-        """Return path for *inner* from the extraction map, or first supported file."""
-        if inner:
-            if inner.lower() in name_map:
-                return name_map[inner.lower()]
-            raise ValueError(f"'{inner}' not found inside ZIP: {zip_path}")
-        for name, path in name_map.items():
-            if _Path(name).suffix.lower() in _supported:
-                return path
-        raise ValueError(f"No supported file found inside ZIP: {zip_path}")
-
-    if same_zip:
-        name_map = _extract_zip_all(left_path)
-        lf = _pick(name_map, left_inner, left_path)
-        rf = _pick(name_map, right_inner, right_path)
-    else:
-        if left_is_zip:
-            lf = _pick(_extract_zip_all(left_path), left_inner, left_path)
-        else:
-            _dest = os.path.join(out_dir, os.path.basename(left_path))
-            if os.path.abspath(left_path) != os.path.abspath(_dest):
-                with open(left_path, "rb") as _s, open(_dest, "wb") as _d:
-                    _d.write(_s.read())
-            all_extracted.append(_dest)
-            lf = _dest
-        if right_is_zip:
-            rf = _pick(_extract_zip_all(right_path), right_inner, right_path)
-        else:
-            _dest = os.path.join(out_dir, os.path.basename(right_path))
-            if os.path.abspath(right_path) != os.path.abspath(_dest):
-                with open(right_path, "rb") as _s, open(_dest, "wb") as _d:
-                    _d.write(_s.read())
-            all_extracted.append(_dest)
-            rf = _dest
-
-    return lf, rf, all_extracted
-
-
-def preprocess(input_paths: list) -> list:
+def preprocess(input_paths: list) -> str:
     """
     Flatten HEADER_FILENAME (master) + DETAIL_FILENAME (detail) into one wide file.
     All detail columns (except JOIN_KEY) are prefixed with DETAIL_PREFIX so
@@ -295,14 +189,9 @@ def preprocess(input_paths: list) -> list:
 
     Returns
     -------
-    list[str]
-        Extracted input files + flat output file path.
+    str
+        Absolute path to the flat output file.
     """
-    if isinstance(input_paths, str):
-        input_paths = [input_paths, input_paths]
-    elif isinstance(input_paths, list) and len(input_paths) == 1:
-        input_paths = [input_paths[0], input_paths[0]]
-
     if len(input_paths) < 2:
         raise ValueError(
             "file_denormalize requires exactly 2 input files: [header/master, detail]."
@@ -310,12 +199,8 @@ def preprocess(input_paths: list) -> list:
 
     header_path = _find_input_file(input_paths, HEADER_FILENAME, 0)
     detail_path = _find_input_file(input_paths, DETAIL_FILENAME, 1)
-    _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_paths[0]))
-    header_file, detail_file, extracted_paths = _extract_from_zips(
-        header_path, detail_path, LEFT_INNER_FILE, RIGHT_INNER_FILE, _out_dir
-    )
-    master = _apply_usecols(_load_file(header_file), LEFT_USECOLS)
-    detail = _apply_usecols(_load_file(detail_file), RIGHT_USECOLS)
+    master = _apply_usecols(_load_file(header_path, LEFT_INNER_FILE),  LEFT_USECOLS)
+    detail = _apply_usecols(_load_file(detail_path, RIGHT_INNER_FILE), RIGHT_USECOLS)
 
     # Resolve effective join key (LEFT_KEY/RIGHT_KEY override JOIN_KEY for mismatched names)
     left_key  = LEFT_KEY  if LEFT_KEY  else JOIN_KEY
@@ -358,5 +243,6 @@ def preprocess(input_paths: list) -> list:
     result = _drop_columns(result, OUTPUT_DROP_COLUMNS)
     result = _insert_column_after(result, INSERT_COLUMN, INSERT_AFTER_COLUMN)
 
+    _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_paths[0]))
     out_path = os.path.join(_out_dir, OUTPUT_FILENAME)
-    return extracted_paths + [_write_output(result, out_path, OUTPUT_FORMAT)]
+    return _write_output(result, out_path, OUTPUT_FORMAT)
