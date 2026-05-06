@@ -123,7 +123,7 @@ def _safe_filename(value: str) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def preprocess(input_path: str) -> str:
+def preprocess(input_path: str) -> list:
     """
     Split *input_path* into one file per distinct value in SPLIT_COLUMN.
     Rows where SPLIT_COLUMN is null/NaN are written to a separate _NULL file.
@@ -135,9 +135,12 @@ def preprocess(input_path: str) -> str:
 
     Returns
     -------
-    str
-        Absolute path to OUTPUT_DIR (contains all split files).
+    list[str]
+        Absolute paths to every output file written.
     """
+    if isinstance(input_path, list):
+        input_path = input_path[0]
+
     df = _load_file(input_path)
 
     if SPLIT_COLUMN not in df.columns:
@@ -146,6 +149,7 @@ def preprocess(input_path: str) -> str:
     _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_path))
     os.makedirs(_out_dir, exist_ok=True)
 
+    output_paths: list = []
     null_mask   = df[SPLIT_COLUMN].isna()
     non_null_df = df[~null_mask]
     null_df     = df[null_mask]
@@ -161,7 +165,7 @@ def preprocess(input_path: str) -> str:
             split_column=SPLIT_COLUMN,
             value=safe_val,
         )
-        _write_output(subset, os.path.join(_out_dir, filename), OUTPUT_FORMAT)
+        output_paths.append(_write_output(subset, os.path.join(_out_dir, filename), OUTPUT_FORMAT))
 
     # Write null rows to a dedicated _NULL file
     if not null_df.empty:
@@ -169,6 +173,6 @@ def preprocess(input_path: str) -> str:
         if not INCLUDE_SPLIT_COLUMN:
             null_subset = null_subset.drop(columns=[SPLIT_COLUMN])
         null_filename = f"{SPLIT_COLUMN}_NULL.{OUTPUT_FORMAT.lower()}"
-        _write_output(null_subset, os.path.join(_out_dir, null_filename), OUTPUT_FORMAT)
+        output_paths.append(_write_output(null_subset, os.path.join(_out_dir, null_filename), OUTPUT_FORMAT))
 
-    return os.path.abspath(_out_dir)
+    return output_paths

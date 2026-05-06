@@ -116,7 +116,7 @@ def _write_output(df: pd.DataFrame, out_path: str, fmt: str) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def preprocess(input_path: str) -> str:
+def preprocess(input_path: str) -> list:
     """
     Rename columns using COLUMN_MAPPING.  Source columns not present in the
     file are silently skipped.  If DROP_UNMAPPED is True, columns whose
@@ -145,4 +145,4 @@ def preprocess(input_path: str) -> str:
 
     _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_path))
     out_path = os.path.join(_out_dir, OUTPUT_FILENAME)
-    return _write_output(df, out_path, OUTPUT_FORMAT)
+    return [_write_output(df, out_path, OUTPUT_FORMAT)]
