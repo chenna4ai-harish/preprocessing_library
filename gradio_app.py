@@ -92,14 +92,9 @@ _TEMPLATE_CATEGORIES: dict[str, list[str]] = {
                        "file_denormalize_zip","file_delta_load_zip","file_join_filter_agg_zip"],
 }
 
-# Maps ZIP-variant catalog names → the real template file to use for generation
-_ZIP_TEMPLATE_ALIASES: dict[str, str] = {
-    "file_join_two_zip":        "file_join_two",
-    "file_join_multi_key_zip":  "file_join_multi_key",
-    "file_denormalize_zip":     "file_denormalize",
-    "file_delta_load_zip":      "file_delta_load",
-    "file_join_filter_agg_zip": "file_join_filter_agg",
-}
+# Maps ZIP-variant catalog names → the real template file to use for generation.
+# All ZIP variants now have dedicated template files — this dict is intentionally empty.
+_ZIP_TEMPLATE_ALIASES: dict[str, str] = {}
 
 # ---------------------------------------------------------------------------
 # list-of-dicts param schemas for interactive table editors  (Phase C1)
@@ -583,8 +578,8 @@ TEMPLATE_CATALOG: dict[str, dict] = {
     # surface LEFT_INNER_FILE / RIGHT_INNER_FILE at the top of the params form.
     "file_join_two_zip": {
         "display_name": "Join Two ZIP Files",
-        "description":  "Extract one named file from each of two ZIPs, then join them on a key column.",
-        "function_sig": "preprocess(input_paths: list) -> str",
+        "description":  "Extract ALL contents from each ZIP to the output directory, then join the inner data files on a key column. Same ZIP extracted only once; base directory scanned for additional ZIPs.",
+        "function_sig": "preprocess(input_paths: list) -> list",
         "input_type":   "two",
         "parameters": [
             {"name": "LEFT_INNER_FILE",    "type": "str",  "default": "",          "help": "File to extract from the Left ZIP (e.g. customers.csv). Required."},
@@ -610,8 +605,8 @@ TEMPLATE_CATALOG: dict[str, dict] = {
 
     "file_join_multi_key_zip": {
         "display_name": "Join Two ZIP Files (Multi-Key)",
-        "description":  "Extract one named file from each of two ZIPs, then join on multiple key columns.",
-        "function_sig": "preprocess(input_paths: list) -> str",
+        "description":  "Extract ALL contents from each ZIP to the output directory, then join on multiple key columns. Same ZIP extracted only once; base directory scanned for additional ZIPs.",
+        "function_sig": "preprocess(input_paths: list) -> list",
         "input_type":   "two",
         "parameters": [
             {"name": "LEFT_INNER_FILE",    "type": "str",  "default": "",                 "help": "File to extract from the Left ZIP (e.g. customers.csv). Required."},
@@ -637,8 +632,8 @@ TEMPLATE_CATALOG: dict[str, dict] = {
 
     "file_denormalize_zip": {
         "display_name": "Denormalize ZIP Files (Header + Detail)",
-        "description":  "Extract a header file and detail file from two ZIPs, then flatten into a single wide file.",
-        "function_sig": "preprocess(input_paths: list) -> str",
+        "description":  "Extract ALL contents from each ZIP to the output directory, then flatten header+detail into one wide file. Same ZIP extracted only once; base directory scanned for additional ZIPs.",
+        "function_sig": "preprocess(input_paths: list) -> list",
         "input_type":   "two",
         "parameters": [
             {"name": "LEFT_INNER_FILE",    "type": "str",  "default": "",               "help": "File to extract from the Header ZIP. Required."},
@@ -665,8 +660,8 @@ TEMPLATE_CATALOG: dict[str, dict] = {
 
     "file_delta_load_zip": {
         "display_name": "Delta Load from ZIP Files",
-        "description":  "Extract current and baseline files from two ZIPs, then tag rows as NEW / CHANGED / DELETED.",
-        "function_sig": "preprocess(input_paths: list) -> str",
+        "description":  "Extract ALL contents from each ZIP to the output directory, then tag rows as NEW / CHANGED / DELETED. Same ZIP extracted only once; base directory scanned for additional ZIPs.",
+        "function_sig": "preprocess(input_paths: list) -> list",
         "input_type":   "two",
         "parameters": [
             {"name": "LEFT_INNER_FILE",    "type": "str",  "default": "",            "help": "File to extract from the New/Current ZIP. Required."},
@@ -688,8 +683,8 @@ TEMPLATE_CATALOG: dict[str, dict] = {
 
     "file_join_filter_agg_zip": {
         "display_name": "Join ZIP Files, Filter & Aggregate",
-        "description":  "Extract one file from each of two ZIPs, join them, apply WHERE filter, group-by aggregate, optional ranking.",
-        "function_sig": "preprocess(input_paths: list) -> str",
+        "description":  "Extract ALL contents from each ZIP to the output directory, then join, apply WHERE filter, group-by aggregate, optional ranking. Same ZIP extracted only once; base directory scanned for additional ZIPs.",
+        "function_sig": "preprocess(input_paths: list) -> list",
         "input_type":   "two",
         "parameters": [
             {"name": "LEFT_INNER_FILE",    "type": "str",  "default": "",             "help": "File to extract from the Left ZIP. Required."},
@@ -3033,7 +3028,7 @@ def build_ui() -> gr.Blocks:
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Preprocessing Script Library — Gradio UI")
-    parser.add_argument("--port",  type=int, default=7868)
+    parser.add_argument("--port",  type=int, default=7862)
     parser.add_argument("--host",  type=str, default="127.0.0.1")
     parser.add_argument("--share", action="store_true")
     args = parser.parse_args()
