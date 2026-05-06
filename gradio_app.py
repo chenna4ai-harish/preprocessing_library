@@ -84,11 +84,11 @@ _TEMPLATE_CATEGORIES: dict[str, list[str]] = {
                        "file_zip_extract_join"],
     "Clean Data":     ["file_deduplicate","file_rename_columns",
                        "file_handle_nulls","file_cast_types"],
-    "Split / Filter": ["file_split_by_value","file_filter_to_files",
-                       "file_split_columns","file_filter_by_values"],
+    "Split / Filter": ["file_column_split","file_filter_to_files","file_split_columns"],
     "Summarise":      ["file_aggregate","file_rank_filter","file_join_filter_agg"],
     "Track Changes":  ["file_delta_load"],
-    "ZIP Input":      ["file_zip_extract_join","file_join_two_zip","file_join_multi_key_zip",
+    "ZIP Input":      ["file_zip_extract_join","file_union_zip","file_column_split_zip",
+                       "file_join_two_zip","file_join_multi_key_zip",
                        "file_denormalize_zip","file_delta_load_zip","file_join_filter_agg_zip"],
 }
 
@@ -126,11 +126,6 @@ _LOD_SCHEMAS: dict[str, dict] = {
         "headers":     ["column", "target_type", "format"],
         "default_row": ["amount", "float", ""],
     },
-    "VALUE_GROUPS": {
-        "label":       "Value Groups  (comma-separate multiple values)",
-        "headers":     ["values", "output_filename"],
-        "default_row": ["ACTIVE,APPROVED", "active.csv"],
-    },
     "COLUMN_GROUPS": {
         "label":       "Column Groups  (comma-separate column names)",
         "headers":     ["columns", "output_filename"],
@@ -141,6 +136,11 @@ _LOD_SCHEMAS: dict[str, dict] = {
         "headers":     ["column", "function", "output_column"],
         "default_row": ["amount", "sum", "total_amount"],
     },
+    "GROUPS": {
+        "label":       "Value Groups  (comma-separate multiple values)",
+        "headers":     ["label", "values", "output_filename"],
+        "default_row": ["group1", "A, B", "group1.csv"],
+    },
 }
 
 # Which list-of-dicts param each template uses (first one wins for the editor)
@@ -149,11 +149,12 @@ _TEMPLATE_LOD_PARAM: dict[str, str] = {
     "file_filter_to_files":     "FILTER_RULES",
     "file_handle_nulls":        "NULL_RULES",
     "file_cast_types":          "TYPE_RULES",
-    "file_filter_by_values":    "VALUE_GROUPS",
     "file_split_columns":       "COLUMN_GROUPS",
+    "file_column_split_zip":    "GROUPS",
     "file_aggregate":           "AGGREGATIONS",
     "file_join_filter_agg":     "AGGREGATIONS",
     "file_join_filter_agg_zip": "AGGREGATIONS",
+    "file_column_split":        "GROUPS",
 }
 
 # WHERE condition operator choices  (Phase B3)
@@ -290,20 +291,6 @@ TEMPLATE_CATALOG: dict[str, dict] = {
             {"name": "OUTPUT_DIR",         "type": "str",  "default": "",          "help": "Directory to write the output file."},
             {"name": "OUTPUT_FILENAME",    "type": "str",  "default": "denormalized.csv","help": "Name of the output file."},
             {"name": "OUTPUT_FORMAT",      "type": "str",  "default": "csv",       "help": "csv | xlsx | json | parquet | tsv"},
-        ],
-    },
-
-    "file_split_by_value": {
-        "display_name": "PS-07 — Split by Column Value",
-        "description":  "Split a file into one output file per unique value in a chosen column.",
-        "function_sig": "preprocess(input_path: str) -> str",
-        "input_type":   "single",
-        "parameters": [
-            {"name": "SPLIT_COLUMN",         "type": "str",  "default": "category",    "help": "Column whose distinct values drive the split. ← pick from columns"},
-            {"name": "FILENAME_TEMPLATE",    "type": "str",  "default": "{value}.csv", "help": "Output filename pattern — {value} is replaced by the column value."},
-            {"name": "INCLUDE_SPLIT_COLUMN", "type": "bool", "default": "True",        "help": "Keep the split column in output files."},
-            {"name": "OUTPUT_DIR",           "type": "str",  "default": "",    "help": "Directory to write split files."},
-            {"name": "OUTPUT_FORMAT",        "type": "str",  "default": "csv",         "help": "csv | xlsx | json | parquet | tsv"},
         ],
     },
 
@@ -467,21 +454,33 @@ TEMPLATE_CATALOG: dict[str, dict] = {
         ],
     },
 
-    "file_filter_by_values": {
-        "display_name": "PS-17 — Filter by Value List",
-        "description":  "Route rows to named files by matching a column against value lists (first-match-wins).",
-        "function_sig": "preprocess(input_path: str) -> str",
+    "file_column_split": {
+        "display_name": "PS-19 — Column Value Split (Unified)",
+        "description":  "Split one file into multiple output files by matching a column against configurable value groups. Handles single-value splits, multi-value groups, null rows, and unmatched rows — all through configuration.",
+        "function_sig": "preprocess(input_paths: list) -> list",
         "input_type":   "single",
         "parameters": [
-            {"name": "FILTER_COLUMN",   "type": "str", "default": "status",
-             "help": "Column to match against value lists. ← pick from columns"},
-            {"name": "VALUE_GROUPS", "type": "list_of_dicts",
-             "default": '[{"values": ["ACTIVE", "APPROVED"], "output_filename": "active.csv"}, {"values": ["CLOSED"], "output_filename": "closed.csv"}]',
-             "help": 'Groups (first-match-wins): [{"values":["V1","V2"],"output_filename":"name.csv"}]'},
-            {"name": "CASE_SENSITIVE",  "type": "bool", "default": "False",      "help": "False = case-insensitive matching."},
-            {"name": "OTHERS_FILENAME", "type": "str",  "default": "others.csv", "help": "File for unmatched rows + nulls. Empty string to discard."},
-            {"name": "OUTPUT_DIR",      "type": "str",  "default": "",   "help": "Directory to write output files."},
-            {"name": "OUTPUT_FORMAT",   "type": "str",  "default": "csv",        "help": "csv | xlsx | json | parquet | tsv"},
+            {"name": "SPLIT_COLUMN",       "type": "str",  "default": "category",
+             "help": "Column whose values drive the split. ← pick from columns"},
+            {"name": "GROUPS", "type": "list_of_dicts",
+             "default": '[{"label": "group1", "values": ["A", "B"], "output_filename": "group1.csv"}, {"label": "group2", "values": ["C"], "output_filename": "group2.csv"}]',
+             "help": 'Groups (first-match-wins): [{"label":"name","values":["V1","V2"],"output_filename":"out.csv"}]'},
+            {"name": "CASE_SENSITIVE",     "type": "bool", "default": "False",
+             "help": "False = case-insensitive value matching."},
+            {"name": "INCLUDE_SPLIT_COLUMN","type": "bool","default": "True",
+             "help": "Keep the split column in output files."},
+            {"name": "NULL_HANDLING",      "type": "str",  "default": "merge_into_remaining",
+             "help": "separate_file | merge_into_group:<label> | merge_into_remaining | ignore"},
+            {"name": "NULL_FILENAME",      "type": "str",  "default": "nulls.csv",
+             "help": "Output file for null rows (used when NULL_HANDLING = separate_file)."},
+            {"name": "REMAINING_HANDLING", "type": "str",  "default": "separate_file",
+             "help": "separate_file | merge_into_group:<label> | ignore"},
+            {"name": "REMAINING_FILENAME", "type": "str",  "default": "remaining.csv",
+             "help": "Output file for unmatched rows (used when REMAINING_HANDLING = separate_file)."},
+            {"name": "OUTPUT_DIR",         "type": "str",  "default": "",
+             "help": "Directory to write output files."},
+            {"name": "OUTPUT_FORMAT",      "type": "str",  "default": "csv",
+             "help": "csv | xlsx | json | parquet | tsv"},
         ],
     },
 
@@ -524,6 +523,53 @@ TEMPLATE_CATALOG: dict[str, dict] = {
     # ── ZIP Input Variants ──────────────────────────────────────────────────────
     # These reuse the same template .py files (via _ZIP_TEMPLATE_ALIASES) but
     # surface LEFT_INNER_FILE / RIGHT_INNER_FILE at the top of the params form.
+    "file_union_zip": {
+        "display_name": "PS-02Z — Union ZIP Files",
+        "description":  "Extract ALL files from one or more ZIPs, then vertically stack the named inner file from each ZIP into one consolidated output.",
+        "function_sig": "preprocess(input_paths: list) -> list",
+        "input_type":   "multi",
+        "parameters": [
+            {"name": "INNER_FILE",        "type": "str",  "default": "",             "help": "Filename to pick from each ZIP for union (e.g. data.csv). \"\" = first supported file."},
+            {"name": "OUTPUT_DIR",        "type": "str",  "default": "",             "help": "Directory to write the output file."},
+            {"name": "OUTPUT_FILENAME",   "type": "str",  "default": "union.csv",    "help": "Name of the output file."},
+            {"name": "OUTPUT_FORMAT",     "type": "str",  "default": "csv",          "help": "csv | xlsx | json | parquet | tsv"},
+            {"name": "ADD_SOURCE_TAG",    "type": "bool", "default": "True",         "help": "Add a column showing which file each row came from."},
+            {"name": "SOURCE_TAG_COLUMN", "type": "str",  "default": "_source_file", "help": "Name of the source-tag column."},
+        ],
+    },
+
+    "file_column_split_zip": {
+        "display_name": "PS-19Z — Column Value Split from ZIP",
+        "description":  "Extract ALL files from a ZIP, then split the named inner file into multiple output files based on column values.",
+        "function_sig": "preprocess(input_paths: list) -> list",
+        "input_type":   "single",
+        "parameters": [
+            {"name": "INNER_FILE",         "type": "str",  "default": "",
+             "help": "File to process inside the ZIP (e.g. data.csv). \"\" = first supported file."},
+            {"name": "SPLIT_COLUMN",       "type": "str",  "default": "category",
+             "help": "Column whose values drive the split. ← pick from columns"},
+            {"name": "GROUPS", "type": "list_of_dicts",
+             "default": '[{"label": "group1", "values": ["A", "B"], "output_filename": "group1.csv"}, {"label": "group2", "values": ["C"], "output_filename": "group2.csv"}]',
+             "help": 'Groups (first-match-wins): [{"label":"name","values":["V1","V2"],"output_filename":"out.csv"}]'},
+            {"name": "CASE_SENSITIVE",     "type": "bool", "default": "False",
+             "help": "False = case-insensitive value matching."},
+            {"name": "INCLUDE_SPLIT_COLUMN","type": "bool","default": "True",
+             "help": "Keep the split column in output files."},
+            {"name": "NULL_HANDLING",      "type": "str",  "default": "merge_into_remaining",
+             "help": "separate_file | merge_into_group:<label> | merge_into_remaining | ignore"},
+            {"name": "NULL_FILENAME",      "type": "str",  "default": "nulls.csv",
+             "help": "Output file for null rows (used when NULL_HANDLING = separate_file)."},
+            {"name": "REMAINING_HANDLING", "type": "str",  "default": "separate_file",
+             "help": "separate_file | merge_into_group:<label> | ignore"},
+            {"name": "REMAINING_FILENAME", "type": "str",  "default": "remaining.csv",
+             "help": "Output file for unmatched rows (used when REMAINING_HANDLING = separate_file)."},
+            {"name": "OUTPUT_DIR",         "type": "str",  "default": "",
+             "help": "Directory to write output files."},
+            {"name": "OUTPUT_FORMAT",      "type": "str",  "default": "csv",
+             "help": "csv | xlsx | json | parquet | tsv"},
+        ],
+    },
+
     "file_join_two_zip": {
         "display_name": "Join Two ZIP Files",
         "description":  "Extract one named file from each of two ZIPs, then join them on a key column.",
@@ -712,8 +758,9 @@ _INPUT_FILE_CONFIG: dict[str, list[dict]] = {
                              {"label": "Right File",                   "key": "right_path"}],
     "file_denormalize":     [{"label": "Header File",                  "key": "header_path"},
                              {"label": "Detail File",                  "key": "detail_path"}],
-    "file_split_by_value":  [{"label": "Input File",                   "key": "input_path"}],
-    "file_filter_to_files": [{"label": "Input File",                   "key": "input_path"}],
+    "file_column_split":     [{"label": "Input File",                   "key": "input_path"}],
+    "file_column_split_zip": [{"label": "ZIP File",                     "key": "input_path"}],
+    "file_filter_to_files":  [{"label": "Input File",                   "key": "input_path"}],
     "file_split_columns":   [{"label": "Input File",                   "key": "input_path"}],
     "file_deduplicate":     [{"label": "Input File",                   "key": "input_path"}],
     "file_rename_columns":  [{"label": "Input File",                   "key": "input_path"}],
@@ -723,10 +770,10 @@ _INPUT_FILE_CONFIG: dict[str, list[dict]] = {
     "file_delta_load":      [{"label": "New File (current data)",      "key": "new_path"},
                              {"label": "Old / Reference File",         "key": "old_path"}],
     "file_rank_filter":       [{"label": "Input File",                   "key": "input_path"}],
-    "file_filter_by_values":  [{"label": "Input File",                   "key": "input_path"}],
     "file_join_filter_agg":   [{"label": "Left File",                    "key": "left_path"},
                                 {"label": "Right File",                   "key": "right_path"}],
     "file_zip_extract_join":   [{"label": "ZIP File (comma-separated if multiple)", "key": "input_paths", "multi": True}],
+    "file_union_zip":          [{"label": "ZIP Files (comma-separated paths)",      "key": "input_paths", "multi": True}],
     # ZIP variants — same slot structure as their originals
     "file_join_two_zip":        [{"label": "Left ZIP File",               "key": "left_path"},
                                  {"label": "Right ZIP File",              "key": "right_path"}],
@@ -2975,7 +3022,7 @@ def build_ui() -> gr.Blocks:
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Preprocessing Script Library — Gradio UI")
-    parser.add_argument("--port",  type=int, default=7868)
+    parser.add_argument("--port",  type=int, default=7864)
     parser.add_argument("--host",  type=str, default="127.0.0.1")
     parser.add_argument("--share", action="store_true")
     args = parser.parse_args()
