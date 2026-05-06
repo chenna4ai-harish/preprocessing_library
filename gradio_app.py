@@ -1466,9 +1466,8 @@ def update_template_ui(template_name: str):
 # ---------------------------------------------------------------------------
 _COL_PICKER_PARAMS = [
     ("JOIN_KEY",       "PS-03/06: join key"),
-    ("SPLIT_COLUMN",   "PS-07: split column"),
-    ("FILTER_COLUMN",  "PS-17: filter column"),
-    ("RANK_BY_COLUMN", "PS-16: rank by column"),
+    ("SPLIT_COLUMN",   "PS-19/19Z: split column"),
+    ("RANK_BY_COLUMN", "PS-16/18: rank by column"),
 ]
 _COL_LIST_PARAMS = [
     ("KEY_COLUMNS",        "PS-10/15: key columns"),
