@@ -270,5 +270,4 @@ def preprocess(input_paths: list) -> list:
     finally:
         _shutil.rmtree(temp_dir, ignore_errors=True)
 
-
 # ── __main__ block is appended by the Gradio app at generation time ───────────
