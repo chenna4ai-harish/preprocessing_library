@@ -133,6 +133,32 @@ def preprocess(input_path: str) -> list:
     list
         Absolute path to the renamed output file.
     """
+    if isinstance(input_path, list):
+        input_path = input_path[0]
+
+    _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_path))
+    os.makedirs(_out_dir, exist_ok=True)
+
+    if _Path(input_path).suffix.lower() == ".zip":
+        _supported = {".csv", ".tsv", ".txt", ".xlsx", ".xls", ".json", ".xml"}
+        output_paths: list = []
+        with _tempfile.TemporaryDirectory() as tmp_dir:
+            with _zipfile.ZipFile(input_path, "r") as z:
+                names = [n for n in z.namelist() if _Path(n).suffix.lower() in _supported]
+                for name in names:
+                    z.extract(name, tmp_dir)
+            for name in names:
+                df = _load_file(os.path.join(tmp_dir, name))
+                stem = _Path(os.path.basename(name)).stem
+                rename_map = {src: tgt for src, tgt in COLUMN_MAPPING.items() if src in df.columns}
+                df = df.rename(columns=rename_map)
+                if DROP_UNMAPPED:
+                    keep_cols = list(COLUMN_MAPPING.values())
+                    df = df[[c for c in keep_cols if c in df.columns]]
+                out_path = os.path.join(_out_dir, f"{stem}.{OUTPUT_FORMAT.lower()}")
+                output_paths.append(_write_output(df, out_path, OUTPUT_FORMAT))
+        return output_paths
+
     df = _load_file(input_path)
 
     # Only rename columns that actually exist in the DataFrame
@@ -144,6 +170,5 @@ def preprocess(input_path: str) -> list:
         keep_cols = list(COLUMN_MAPPING.values())
         df = df[[c for c in keep_cols if c in df.columns]]
 
-    _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_path))
     out_path = os.path.join(_out_dir, OUTPUT_FILENAME)
     return [_write_output(df, out_path, OUTPUT_FORMAT)]

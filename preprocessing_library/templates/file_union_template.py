@@ -163,6 +163,30 @@ def _expand_zip_inputs(input_paths: list) -> "tuple[list, object]":
     return expanded, tmp
 
 
+def _extract_zip_to_output(input_paths: list, out_dir: str) -> "tuple[list, list]":
+    """Extract all ZIP contents to out_dir. Returns (expanded_input_paths, all_extracted_paths)."""
+    import shutil as _shutil
+    _supported = {".csv", ".tsv", ".txt", ".xlsx", ".xls", ".json", ".xml"}
+    expanded: list = []
+    all_extracted: list = []
+    seen: set = set()
+    for p in input_paths:
+        abs_p = os.path.abspath(p)
+        if _Path(p).suffix.lower() == ".zip" and abs_p not in seen:
+            seen.add(abs_p)
+            with _zipfile.ZipFile(p, "r") as z:
+                names = [n for n in z.namelist() if _Path(n).suffix.lower() in _supported]
+                for name in names:
+                    dest = os.path.join(out_dir, os.path.basename(name))
+                    with z.open(name) as src_f, open(dest, "wb") as dst_f:
+                        _shutil.copyfileobj(src_f, dst_f)
+                    expanded.append(dest)
+                    all_extracted.append(dest)
+        else:
+            expanded.append(p)
+    return expanded, all_extracted
+
+
 def _dedup_column_names(cols: list[str]) -> list[str]:
     """Make column names unique by appending .1, .2, ... to duplicates."""
     seen: dict[str, int] = {}
@@ -351,11 +375,14 @@ def preprocess(input_paths: list, output_columns=None) -> list:
     """
     if isinstance(input_paths, str):
         input_paths = [input_paths]
-    _tmp = None
-    if any(_Path(p).suffix.lower() == ".zip" for p in input_paths):
-        input_paths, _tmp = _expand_zip_inputs(input_paths)
     if not input_paths:
         raise ValueError("input_paths is empty — at least one file is required.")
+
+    _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_paths[0]))
+    os.makedirs(_out_dir, exist_ok=True)
+    all_extracted: list = []
+    if any(_Path(p).suffix.lower() == ".zip" for p in input_paths):
+        input_paths, all_extracted = _extract_zip_to_output(input_paths, _out_dir)
 
     resolved_paths = _resolve_input_paths(input_paths)
     canonical_cols = _coerce_output_columns(output_columns)
@@ -385,8 +412,5 @@ def preprocess(input_paths: list, output_columns=None) -> list:
         frames = _union_align_columns(frames)
 
     combined = pd.concat(frames, ignore_index=True, sort=False)
-    _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_paths[0]))
     out_path = os.path.join(_out_dir, OUTPUT_FILENAME)
-    if _tmp is not None:
-        _tmp.cleanup()
-    return [_write_output(combined, out_path, OUTPUT_FORMAT)]
+    return all_extracted + [_write_output(combined, out_path, OUTPUT_FORMAT)]
