@@ -87,7 +87,7 @@
     "template_name": "file_join_two",
     "display_name": "PS-03 — Join Two Files",
     "description": "Join two files on a single key column with configurable join type. Files are resolved by name from the input list — order does not matter.",
-    "function_sig": "preprocess(input_paths: list) -> list",
+    "function_sig": "preprocess(input_paths: list) -> str",
     "input_type": "multi",
     "parameters": [
       {
@@ -255,7 +255,7 @@
     "template_name": "file_join_multi_key",
     "display_name": "PS-05 — Join Two Files (Multi-Key)",
     "description": "Join two files on multiple key columns simultaneously (composite key). Files are resolved by name from the input list — order does not matter.",
-    "function_sig": "preprocess(input_paths: list) -> list",
+    "function_sig": "preprocess(input_paths: list) -> str",
     "input_type": "multi",
     "parameters": [
       {
@@ -384,7 +384,7 @@
     "template_name": "file_denormalize",
     "display_name": "PS-06 — Denormalize (Header + Detail)",
     "description": "Join a header (master) file and a detail file; prefix all detail columns. Files are resolved by name from the input list — order does not matter.",
-    "function_sig": "preprocess(input_paths: list) -> list",
+    "function_sig": "preprocess(input_paths: list) -> str",
     "input_type": "multi",
     "parameters": [
       {
@@ -849,7 +849,7 @@
     "template_name": "file_delta_load",
     "display_name": "PS-15 — Delta Load (Change Detection)",
     "description": "Compare a new file against an old file and tag rows as NEW / CHANGED / DELETED. Files are resolved by name from the input list — order does not matter.",
-    "function_sig": "preprocess(input_paths: list) -> list",
+    "function_sig": "preprocess(input_paths: list) -> str",
     "input_type": "multi",
     "parameters": [
       {
@@ -1068,7 +1068,7 @@
     "template_name": "file_join_filter_agg",
     "display_name": "PS-18 — Join, Filter & Aggregate",
     "description": "Join two files, apply an optional WHERE filter on the result, group-by aggregate, then optionally rank and keep top-N rows. Files are resolved by name from the input list.",
-    "function_sig": "preprocess(input_paths: list) -> list",
+    "function_sig": "preprocess(input_paths: list) -> str",
     "input_type": "multi",
     "parameters": [
       {

@@ -74,12 +74,9 @@ def _run_template(template_name: str, parameters: dict, input_paths, out_dir: st
     ns: dict = {}
     exec(compile(code, script_path, "exec"), ns)  # noqa: S102
     preprocess = ns["preprocess"]
-    result = preprocess(input_paths)
-    # Many multi-file templates return a list of paths
-    # (e.g. extracted inputs + output). Normalize to the output path.
-    if isinstance(result, list) and result:
-        return result[-1]
-    return result
+    if isinstance(input_paths, list):
+        return preprocess(input_paths)
+    return preprocess(input_paths)
 
 
 # ---------------------------------------------------------------------------
@@ -183,15 +180,6 @@ class TestAllTemplates(unittest.TestCase):
                 "RIGHT_SUFFIX":    "_ord",
                 "LEFT_FILENAME":   "customers.csv",
                 "RIGHT_FILENAME":  "orders.csv",
-                "LEFT_USECOLS":     "[]",
-                "RIGHT_USECOLS":    "[]",
-                "LEFT_INNER_FILE":  "",
-                "RIGHT_INNER_FILE": "",
-                "DEDUP_RIGHT_BY":   "",
-                "DEDUP_KEEP":       "first",
-                "OUTPUT_DROP_COLUMNS": "[]",
-                "INSERT_COLUMN":        "",
-                "INSERT_AFTER_COLUMN":  "",
                 "OUTPUT_DIR":      out_dir,
                 "OUTPUT_FILENAME": "joined.csv",
                 "OUTPUT_FORMAT":   "csv",
@@ -226,7 +214,6 @@ class TestAllTemplates(unittest.TestCase):
         result = _run_template(
             "file_join_multi",
             {
-                "BASE_FILENAME":   "",
                 "JOIN_STEPS":      join_steps,
                 "OUTPUT_DIR":      out_dir,
                 "OUTPUT_FILENAME": "multi_joined.csv",
@@ -264,15 +251,6 @@ class TestAllTemplates(unittest.TestCase):
                 "RIGHT_SUFFIX":    "_r",
                 "LEFT_FILENAME":   "left.csv",
                 "RIGHT_FILENAME":  "right.csv",
-                "LEFT_USECOLS":     "[]",
-                "RIGHT_USECOLS":    "[]",
-                "LEFT_INNER_FILE":  "",
-                "RIGHT_INNER_FILE": "",
-                "DEDUP_RIGHT_BY":   "",
-                "DEDUP_KEEP":       "first",
-                "OUTPUT_DROP_COLUMNS": "[]",
-                "INSERT_COLUMN":        "",
-                "INSERT_AFTER_COLUMN":  "",
                 "OUTPUT_DIR":      out_dir,
                 "OUTPUT_FILENAME": "multikey_joined.csv",
                 "OUTPUT_FORMAT":   "csv",
@@ -300,15 +278,6 @@ class TestAllTemplates(unittest.TestCase):
                 "RIGHT_SUFFIX":    "_r",
                 "LEFT_FILENAME":   "orders.csv",
                 "RIGHT_FILENAME":  "targets.csv",
-                "LEFT_USECOLS":     "[]",
-                "RIGHT_USECOLS":    "[]",
-                "LEFT_INNER_FILE":  "",
-                "RIGHT_INNER_FILE": "",
-                "DEDUP_RIGHT_BY":   "",
-                "DEDUP_KEEP":       "first",
-                "OUTPUT_DROP_COLUMNS": "[]",
-                "INSERT_COLUMN":        "",
-                "INSERT_AFTER_COLUMN":  "",
                 "OUTPUT_DIR":      out_dir2,
                 "OUTPUT_FILENAME": "cross_key_joined.csv",
                 "OUTPUT_FORMAT":   "csv",
@@ -336,23 +305,10 @@ class TestAllTemplates(unittest.TestCase):
             "file_denormalize",
             {
                 "JOIN_KEY":        "cust_id",
-                "LEFT_KEY":        "",
-                "RIGHT_KEY":       "",
                 "JOIN_TYPE":       "left",
-                "LEFT_SUFFIX":     "_left",
-                "RIGHT_SUFFIX":    "_right",
                 "DETAIL_PREFIX":   "inv_",
                 "HEADER_FILENAME": "master.csv",
                 "DETAIL_FILENAME": "detail.csv",
-                "LEFT_USECOLS":     "[]",
-                "RIGHT_USECOLS":    "[]",
-                "LEFT_INNER_FILE":  "",
-                "RIGHT_INNER_FILE": "",
-                "DEDUP_RIGHT_BY":   "",
-                "DEDUP_KEEP":       "first",
-                "OUTPUT_DROP_COLUMNS": "[]",
-                "INSERT_COLUMN":        "",
-                "INSERT_AFTER_COLUMN":  "",
                 "OUTPUT_DIR":      out_dir,
                 "OUTPUT_FILENAME": "denorm_out.csv",
                 "OUTPUT_FORMAT":   "csv",
@@ -682,13 +638,6 @@ class TestAllTemplates(unittest.TestCase):
                 "DELTA_STATUS_COLUMN": "delta_status",
                 "NEW_FILENAME":        "current.csv",
                 "OLD_FILENAME":        "baseline.csv",
-                "LEFT_USECOLS":        "[]",
-                "RIGHT_USECOLS":       "[]",
-                "LEFT_INNER_FILE":     "",
-                "RIGHT_INNER_FILE":    "",
-                "OUTPUT_DROP_COLUMNS": "[]",
-                "INSERT_COLUMN":       "",
-                "INSERT_AFTER_COLUMN": "",
                 "OUTPUT_DIR":          out_dir,
                 "OUTPUT_FILENAME":     "delta_out.csv",
                 "OUTPUT_FORMAT":       "csv",
@@ -806,14 +755,6 @@ class TestAllTemplates(unittest.TestCase):
                 "JOIN_TYPE":        "inner",
                 "LEFT_FILENAME":    "orders.csv",
                 "RIGHT_FILENAME":   "customers.csv",
-                "LEFT_USECOLS":     "[]",
-                "RIGHT_USECOLS":    "[]",
-                "LEFT_INNER_FILE":  "",
-                "RIGHT_INNER_FILE": "",
-                "DEDUP_RIGHT_BY":   "",
-                "DEDUP_KEEP":       "first",
-                "LEFT_SUFFIX":      "_left",
-                "RIGHT_SUFFIX":     "_right",
                 "WHERE_CONDITION":  "amount > 100",
                 "GROUP_BY_COLUMNS": '["cust_id", "region"]',
                 "AGGREGATIONS":     aggregations,
@@ -821,9 +762,6 @@ class TestAllTemplates(unittest.TestCase):
                 "RANK_ORDER":       "desc",
                 "RANK_COLUMN_NAME": "rank",
                 "KEEP_TOP_N":       "0",
-                "OUTPUT_DROP_COLUMNS": "[]",
-                "INSERT_COLUMN":        "",
-                "INSERT_AFTER_COLUMN":  "",
                 "OUTPUT_DIR":       out_dir,
                 "OUTPUT_FILENAME":  "join_filter_agg.csv",
                 "OUTPUT_FORMAT":    "csv",

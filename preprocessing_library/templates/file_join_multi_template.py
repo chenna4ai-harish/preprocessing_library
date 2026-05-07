@@ -135,43 +135,6 @@ def _write_output(df: pd.DataFrame, out_path: str, fmt: str) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _expand_zip_inputs(input_paths: list, tmp_dir: str) -> list:
-    """Extract ALL supported files from ZIPs to tmp_dir; pass plain files through.
-    Scans each path's base directory for neighbour ZIPs. Returns resolved paths."""
-    _supported = {".csv", ".tsv", ".txt", ".xlsx", ".xls", ".json", ".xml"}
-    _seen: dict = {}
-    _resolved: list = []
-
-    def _extract_one_zip(zip_path: str) -> None:
-        key = os.path.abspath(zip_path)
-        if key in _seen:
-            return
-        _seen[key] = True
-        with _zipfile.ZipFile(zip_path, "r") as z:
-            for name in z.namelist():
-                if _Path(name).suffix.lower() in _supported:
-                    dest = os.path.join(tmp_dir, os.path.basename(name))
-                    with z.open(name) as src, open(dest, "wb") as dst:
-                        dst.write(src.read())
-                    if dest not in _resolved:
-                        _resolved.append(dest)
-        for entry in os.scandir(os.path.dirname(os.path.abspath(zip_path))):
-            if entry.is_file() and entry.name.lower().endswith(".zip"):
-                _extract_one_zip(entry.path)
-
-    for p in input_paths:
-        if _Path(p).suffix.lower() == ".zip":
-            _extract_one_zip(p)
-        else:
-            if p not in _resolved:
-                _resolved.append(p)
-            for entry in os.scandir(os.path.dirname(os.path.abspath(p))):
-                if entry.is_file() and entry.name.lower().endswith(".zip"):
-                    _extract_one_zip(entry.path)
-
-    return _resolved
-
-
 def preprocess(input_paths: list) -> list:
     """
     Start with BASE_FILENAME (or input_paths[0]) as the base DataFrame, then
@@ -192,14 +155,9 @@ def preprocess(input_paths: list) -> list:
         Absolute path to the fully merged output file.
     """
     if isinstance(input_paths, str):
-        input_paths = [p.strip() for p in input_paths.split(",") if p.strip()]
+        input_paths = [input_paths]
     if not input_paths:
         raise ValueError("input_paths is empty.")
-
-    _orig_first = input_paths[0]
-    _tmp = _tempfile.TemporaryDirectory()
-    if any(_Path(p).suffix.lower() == ".zip" for p in input_paths):
-        input_paths = _expand_zip_inputs(input_paths, _tmp.name)
 
     # Resolve base file by name or fall back to first path
     if BASE_FILENAME:
@@ -254,7 +212,6 @@ def preprocess(input_paths: list) -> list:
             suffixes=(sfx_left, sfx_right),
         )
 
-    _tmp.cleanup()
-    _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(_orig_first))
+    _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(base_path))
     out_path = os.path.join(_out_dir, OUTPUT_FILENAME)
     return [_write_output(result, out_path, OUTPUT_FORMAT)]

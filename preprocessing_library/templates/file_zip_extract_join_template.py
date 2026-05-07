@@ -145,18 +145,6 @@ def preprocess(input_paths: list) -> list:
 
     _skip_exts = {e.lower() for e in SKIP_EXTENSIONS} if SKIP_EXTENSIONS else set()
 
-    # ── Scan base directory for additional ZIPs and extract them ─────────────
-    _base_dir = os.path.dirname(os.path.abspath(zip_path))
-    for _entry in os.scandir(_base_dir):
-        if _entry.name.lower().endswith(".zip") and os.path.abspath(_entry.path) != os.path.abspath(zip_path):
-            with _zipfile.ZipFile(_entry.path, "r") as _ez:
-                for _en in _ez.namelist():
-                    if _en.endswith("/"): continue
-                    _edest = os.path.join(target_dir, os.path.basename(_en))
-                    with _ez.open(_en) as _src, open(_edest, "wb") as _dst:
-                        _dst.write(_src.read())
-                    output_paths.append(_edest)
-
     try:
         with _zipfile.ZipFile(zip_path, "r") as zf:
             for member in zf.namelist():
