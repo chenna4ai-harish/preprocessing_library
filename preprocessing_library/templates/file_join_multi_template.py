@@ -151,9 +151,11 @@ def preprocess(input_paths: list) -> str:
 
     Returns
     -------
-    str
+    list
         Absolute path to the fully merged output file.
     """
+    if isinstance(input_paths, str):
+        input_paths = [input_paths]
     if not input_paths:
         raise ValueError("input_paths is empty.")
 
@@ -212,4 +214,4 @@ def preprocess(input_paths: list) -> str:
 
     _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(base_path))
     out_path = os.path.join(_out_dir, OUTPUT_FILENAME)
-    return _write_output(result, out_path, OUTPUT_FORMAT)
+    return [_write_output(result, out_path, OUTPUT_FORMAT)]
