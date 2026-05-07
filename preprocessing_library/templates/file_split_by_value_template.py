@@ -24,6 +24,7 @@ OUTPUT_DIR           = "{{OUTPUT_DIR}}"
 OUTPUT_FORMAT        = "{{OUTPUT_FORMAT}}"
 FILENAME_TEMPLATE    = "{{FILENAME_TEMPLATE}}"
 INCLUDE_SPLIT_COLUMN = {{INCLUDE_SPLIT_COLUMN}}
+LEFT_INNER_FILE      = "{{LEFT_INNER_FILE}}"
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -197,8 +198,14 @@ def preprocess(input_path: str) -> list:
                 for name in names:
                     z.extract(name, tmp_dir)
             for name in names:
+                basename = os.path.basename(name)
                 df = _load_file(os.path.join(tmp_dir, name))
-                output_paths.extend(_process_one_file(df, os.path.basename(name), _out_dir))
+                if LEFT_INNER_FILE and basename != LEFT_INNER_FILE:
+                    stem = _Path(basename).stem
+                    out_path = os.path.join(_out_dir, f"{stem}.{OUTPUT_FORMAT.lower()}")
+                    output_paths.append(_write_output(df, out_path, OUTPUT_FORMAT))
+                else:
+                    output_paths.extend(_process_one_file(df, basename, _out_dir))
         return output_paths
 
     df = _load_file(input_path)
