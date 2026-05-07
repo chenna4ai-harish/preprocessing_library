@@ -5,7 +5,7 @@ Purpose  : Flatten a normalised master-detail relationship into a single wide fi
            input_paths[0] = master file  (e.g. customers)
            input_paths[1] = detail file  (e.g. invoices)
            All detail columns (except JOIN_KEY) are prefixed with DETAIL_PREFIX.
-Contract : preprocess(input_paths: list) -> str
+Contract : preprocess(input_paths: list) -> list
 """
 from __future__ import annotations
 
@@ -105,20 +105,18 @@ def _load_xml(file_path: str) -> pd.DataFrame:
 
 def _load_zip(file_path: str, inner_name: str = "") -> pd.DataFrame:
     _supported = {".csv", ".tsv", ".txt", ".xlsx", ".xls", ".json", ".xml"}
-    with _zipfile.ZipFile(file_path, "r") as z:
-        names = z.namelist()
+    with _tempfile.TemporaryDirectory() as tmp_dir:
+        with _zipfile.ZipFile(file_path, "r") as z:
+            supported = [n for n in z.namelist() if _Path(n).suffix.lower() in _supported]
+            for name in supported:
+                z.extract(name, tmp_dir)
         if inner_name:
-            for name in names:
+            for name in supported:
                 if os.path.basename(name).lower() == inner_name.lower():
-                    with _tempfile.TemporaryDirectory() as tmp_dir:
-                        z.extract(name, tmp_dir)
-                        return _load_file(os.path.join(tmp_dir, name))
-            raise ValueError(f"'{inner_name}' not found inside ZIP: {file_path}")
-        for name in names:
-            if _Path(name).suffix.lower() in _supported:
-                with _tempfile.TemporaryDirectory() as tmp_dir:
-                    z.extract(name, tmp_dir)
                     return _load_file(os.path.join(tmp_dir, name))
+            raise ValueError(f"'{inner_name}' not found inside ZIP: {file_path}")
+        if supported:
+            return _load_file(os.path.join(tmp_dir, supported[0]))
     raise ValueError(f"No loadable file found inside ZIP: {file_path}")
 
 
@@ -226,7 +224,7 @@ def preprocess(input_paths: list) -> list:
 
     Returns
     -------
-    str
+    list
         Absolute path to the flat output file.
     """
     if isinstance(input_paths, str):

@@ -4,7 +4,7 @@ Template : file_split_by_value  |  PS-07
 Purpose  : Split a single file into N output files — one per distinct value
            found in SPLIT_COLUMN.  Null/NaN values are written to a separate
            {SPLIT_COLUMN}_NULL file.
-Contract : preprocess(input_path: str) -> str   (returns OUTPUT_DIR)
+Contract : preprocess(input_path: str) -> list
 """
 from __future__ import annotations
 
@@ -89,12 +89,13 @@ def _load_xml(file_path: str) -> pd.DataFrame:
 
 def _load_zip(file_path: str) -> pd.DataFrame:
     _supported = {".csv", ".tsv", ".txt", ".xlsx", ".xls", ".json", ".xml"}
-    with _zipfile.ZipFile(file_path, "r") as z:
-        for name in z.namelist():
-            if _Path(name).suffix.lower() in _supported:
-                with _tempfile.TemporaryDirectory() as tmp_dir:
-                    z.extract(name, tmp_dir)
-                    return _load_file(os.path.join(tmp_dir, name))
+    with _tempfile.TemporaryDirectory() as tmp_dir:
+        with _zipfile.ZipFile(file_path, "r") as z:
+            names = [n for n in z.namelist() if _Path(n).suffix.lower() in _supported]
+            for name in names:
+                z.extract(name, tmp_dir)
+        if names:
+            return _load_file(os.path.join(tmp_dir, names[0]))
     raise ValueError(f"No loadable file found inside ZIP: {file_path}")
 
 
@@ -153,6 +154,8 @@ def preprocess(input_path: str) -> list:
     null_mask   = df[SPLIT_COLUMN].isna()
     non_null_df = df[~null_mask]
     null_df     = df[null_mask]
+
+    output_paths: list = []
 
     # Write one file per distinct non-null value
     for value in non_null_df[SPLIT_COLUMN].unique():
