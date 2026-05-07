@@ -6,7 +6,7 @@ Purpose  : Filter a single column against one or more value lists.
            All rows that do NOT match any group (including nulls) are routed to
            OTHERS_FILENAME — or silently dropped if OTHERS_FILENAME is empty.
 
-Contract : preprocess(input_path: str) -> list  (returns list of output file paths)
+Contract : preprocess(input_path: str) -> list
 
 VALUE_GROUPS format (Python list literal injected at generation time):
     [
@@ -156,6 +156,45 @@ def _isin_mask(col_series: pd.Series, values: list) -> pd.Series:
     return match_mask & ~null_mask
 
 
+def _process_one_file(df: pd.DataFrame, src_basename: str, out_dir: str) -> list:
+    """
+    Route rows from one DataFrame using VALUE_GROUPS.
+    If FILTER_COLUMN is absent, the file is written as-is (pass-through).
+    Returns list of output paths written.
+    """
+    paths: list = []
+
+    if FILTER_COLUMN not in df.columns:
+        stem = _Path(src_basename).stem
+        out_path = os.path.join(out_dir, f"{stem}.{OUTPUT_FORMAT.lower()}")
+        paths.append(_write_output(df, out_path, OUTPUT_FORMAT))
+        return paths
+
+    claimed = pd.Series(False, index=df.index)
+
+    for group in VALUE_GROUPS:
+        values          = group.get("values", [])
+        output_filename = group.get("output_filename", "")
+        if not output_filename:
+            raise ValueError(
+                f"Every VALUE_GROUPS entry must have 'output_filename'. Got: {group}"
+            )
+        if not values:
+            raise ValueError(
+                f"Every VALUE_GROUPS entry must have a non-empty 'values' list. Got: {group}"
+            )
+        match_mask   = _isin_mask(df[FILTER_COLUMN], values) & ~claimed
+        matched_rows = df[match_mask].copy()
+        claimed     |= match_mask
+        paths.append(_write_output(matched_rows, os.path.join(out_dir, output_filename), OUTPUT_FORMAT))
+
+    others = df[~claimed].copy()
+    if OTHERS_FILENAME and not others.empty:
+        paths.append(_write_output(others, os.path.join(out_dir, OTHERS_FILENAME), OUTPUT_FORMAT))
+
+    return paths
+
+
 def preprocess(input_path: str) -> list:
     """
     Route rows from *input_path* to separate output files based on whether
@@ -169,73 +208,42 @@ def preprocess(input_path: str) -> list:
     - Null values in FILTER_COLUMN always go to OTHERS_FILENAME.
     - Rows matching no group go to OTHERS_FILENAME (or are dropped if empty).
 
+    If *input_path* is a ZIP, ALL files inside are extracted first.
+    Files that contain FILTER_COLUMN are routed by value groups; files that
+    do not are written as-is to OUTPUT_DIR.
+
     Parameters
     ----------
-    input_path : str
-        Path to the source file.
+    input_path : str | list
+        Path to the source file or ZIP archive.
 
     Returns
     -------
-    list[str]
-        Absolute paths to every output file written.
+    list
+        List of absolute paths to all written output files.
     """
     if isinstance(input_path, list):
         input_path = input_path[0]
 
-    df = _load_file(input_path)
-
-    if FILTER_COLUMN not in df.columns:
-        raise KeyError(
-            f"FILTER_COLUMN '{FILTER_COLUMN}' not found in file: {input_path}"
-        )
     if not VALUE_GROUPS:
         raise ValueError("VALUE_GROUPS is empty — define at least one group.")
 
     _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_path))
     os.makedirs(_out_dir, exist_ok=True)
-
-    output_paths: list = []
-    # Track which rows have already been claimed by a group (first-match wins)
-    claimed = pd.Series(False, index=df.index)
     output_paths: list = []
 
-    for group in VALUE_GROUPS:
-        values          = group.get("values", [])
-        output_filename = group.get("output_filename", "")
+    if _Path(input_path).suffix.lower() == ".zip":
+        _supported = {".csv", ".tsv", ".txt", ".xlsx", ".xls", ".json", ".xml"}
+        with _tempfile.TemporaryDirectory() as tmp_dir:
+            with _zipfile.ZipFile(input_path, "r") as z:
+                names = [n for n in z.namelist() if _Path(n).suffix.lower() in _supported]
+                for name in names:
+                    z.extract(name, tmp_dir)
+            for name in names:
+                df = _load_file(os.path.join(tmp_dir, name))
+                output_paths.extend(_process_one_file(df, os.path.basename(name), _out_dir))
+        return output_paths
 
-        if not output_filename:
-            raise ValueError(
-                f"Every VALUE_GROUPS entry must have 'output_filename'. Got: {group}"
-            )
-        if not values:
-            raise ValueError(
-                f"Every VALUE_GROUPS entry must have a non-empty 'values' list. Got: {group}"
-            )
-
-        # Match only unclaimed rows (first-match-wins)
-        match_mask    = _isin_mask(df[FILTER_COLUMN], values) & ~claimed
-        matched_rows  = df[match_mask].copy()
-
-        # Mark these rows as claimed before writing
-        claimed |= match_mask
-
-        output_paths.append(
-            _write_output(
-                matched_rows,
-                os.path.join(_out_dir, output_filename),
-                OUTPUT_FORMAT,
-            )
-        )
-
-    # All unclaimed rows (no match + nulls) → OTHERS_FILENAME
-    others = df[~claimed].copy()
-    if OTHERS_FILENAME and not others.empty:
-        output_paths.append(
-            _write_output(
-                others,
-                os.path.join(_out_dir, OTHERS_FILENAME),
-                OUTPUT_FORMAT,
-            )
-        )
-
+    df = _load_file(input_path)
+    output_paths.extend(_process_one_file(df, os.path.basename(input_path), _out_dir))
     return output_paths
