@@ -24,6 +24,7 @@ OUTPUT_DIR           = "{{OUTPUT_DIR}}"
 OUTPUT_FORMAT        = "{{OUTPUT_FORMAT}}"
 FILENAME_TEMPLATE    = "{{FILENAME_TEMPLATE}}"
 INCLUDE_SPLIT_COLUMN = {{INCLUDE_SPLIT_COLUMN}}
+LEFT_INNER_FILE      = "{{LEFT_INNER_FILE}}"
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -194,6 +195,8 @@ def preprocess(input_path: str) -> list:
         with _tempfile.TemporaryDirectory() as tmp_dir:
             with _zipfile.ZipFile(input_path, "r") as z:
                 names = [n for n in z.namelist() if _Path(n).suffix.lower() in _supported]
+                if LEFT_INNER_FILE:
+                    names = [n for n in names if os.path.basename(n) == LEFT_INNER_FILE]
                 for name in names:
                     z.extract(name, tmp_dir)
             for name in names:
