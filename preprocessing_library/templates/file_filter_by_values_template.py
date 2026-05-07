@@ -156,7 +156,7 @@ def _isin_mask(col_series: pd.Series, values: list) -> pd.Series:
     return match_mask & ~null_mask
 
 
-def preprocess(input_path: str) -> str:
+def preprocess(input_path: str) -> list:
     """
     Route rows from *input_path* to separate output files based on whether
     FILTER_COLUMN's value belongs to each group's value list.

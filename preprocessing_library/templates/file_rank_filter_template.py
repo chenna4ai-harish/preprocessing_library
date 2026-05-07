@@ -153,7 +153,7 @@ _RANK_METHOD_MAP = {
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def preprocess(input_path: str) -> str:
+def preprocess(input_path: str) -> list:
     """
     Rank rows within each group defined by PARTITION_BY, then optionally
     filter to the top KEEP_TOP_N rows per group.

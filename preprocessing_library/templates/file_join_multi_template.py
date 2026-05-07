@@ -135,7 +135,7 @@ def _write_output(df: pd.DataFrame, out_path: str, fmt: str) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def preprocess(input_paths: list) -> str:
+def preprocess(input_paths: list) -> list:
     """
     Start with BASE_FILENAME (or input_paths[0]) as the base DataFrame, then
     for each step in JOIN_STEPS load the file by 'filename' (preferred) or

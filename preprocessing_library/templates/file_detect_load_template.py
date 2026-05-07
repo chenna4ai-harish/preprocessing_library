@@ -114,7 +114,7 @@ def _write_output(df: pd.DataFrame, out_path: str, fmt: str) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def preprocess(input_path: str) -> str:
+def preprocess(input_path: str) -> list:
     """
     Auto-detect the format of *input_path*, load into a DataFrame, and write
     a normalised output file to OUTPUT_DIR.

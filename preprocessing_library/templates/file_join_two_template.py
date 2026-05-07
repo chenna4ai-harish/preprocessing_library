@@ -191,7 +191,7 @@ def _insert_column_after(df: pd.DataFrame, col: str, after: str) -> pd.DataFrame
     return df[cols]
 
 
-def preprocess(input_paths: list) -> str:
+def preprocess(input_paths: list) -> list:
     """
     Join LEFT_FILENAME (left) with RIGHT_FILENAME (right) on JOIN_KEY
     using JOIN_TYPE, then write the merged result to OUTPUT_DIR/OUTPUT_FILENAME.

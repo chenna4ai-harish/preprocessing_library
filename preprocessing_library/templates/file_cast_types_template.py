@@ -135,7 +135,7 @@ _BOOL_TRUE  = {"true", "yes", "1", "y", "t"}
 _BOOL_FALSE = {"false", "no", "0", "n", "f"}
 
 
-def preprocess(input_path: str) -> str:
+def preprocess(input_path: str) -> list:
     """
     Cast each column specified in TYPE_RULES to its target type.
     Failed casts are logged to CAST_ERROR_REPORT_FILENAME.

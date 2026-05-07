@@ -123,7 +123,7 @@ def _write_output(df: pd.DataFrame, out_path: str, fmt: str) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def preprocess(input_path: str) -> str:
+def preprocess(input_path: str) -> list:
     """
     Split *input_path* into multiple narrower files.  Each output file
     contains COMMON_KEY_COLUMNS plus the columns defined in its group entry.

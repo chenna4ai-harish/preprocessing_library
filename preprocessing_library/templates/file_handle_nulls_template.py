@@ -165,7 +165,7 @@ def _apply_null_strategy(df: pd.DataFrame, col: str, rule: dict) -> pd.DataFrame
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def preprocess(input_path: str) -> str:
+def preprocess(input_path: str) -> list:
     """
     Load *input_path*, replace NULL_VALUES string representations with pd.NA,
     write a null audit report, apply NULL_RULES, and write cleaned data.

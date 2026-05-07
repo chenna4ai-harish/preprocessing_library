@@ -124,7 +124,7 @@ def _safe_filename(value: str) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def preprocess(input_path: str) -> str:
+def preprocess(input_path: str) -> list:
     """
     Split *input_path* into one file per distinct value in SPLIT_COLUMN.
     Rows where SPLIT_COLUMN is null/NaN are written to a separate _NULL file.

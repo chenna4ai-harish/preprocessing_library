@@ -331,7 +331,7 @@ def _union_align_columns(
     return [df.reindex(columns=ordered_cols) for df in normalized_frames]
 
 
-def preprocess(input_paths: list, output_columns=None) -> str:
+def preprocess(input_paths: list, output_columns=None) -> list:
     """
     Load all files in *input_paths*, optionally tag each row with its source
     filename, concatenate vertically, and write to OUTPUT_DIR/OUTPUT_FILENAME.

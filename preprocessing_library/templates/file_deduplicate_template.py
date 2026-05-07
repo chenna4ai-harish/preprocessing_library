@@ -119,7 +119,7 @@ def _write_output(df: pd.DataFrame, out_path: str, fmt: str) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def preprocess(input_path: str) -> str:
+def preprocess(input_path: str) -> list:
     """
     Deduplicate *input_path* based on KEY_COLUMNS.
     All duplicate rows (all occurrences) are written to the duplicates report.

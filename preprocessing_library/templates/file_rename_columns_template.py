@@ -117,7 +117,7 @@ def _write_output(df: pd.DataFrame, out_path: str, fmt: str) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def preprocess(input_path: str) -> str:
+def preprocess(input_path: str) -> list:
     """
     Rename columns using COLUMN_MAPPING.  Source columns not present in the
     file are silently skipped.  If DROP_UNMAPPED is True, columns whose

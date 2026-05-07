@@ -129,7 +129,7 @@ def _write_output(df: pd.DataFrame, out_path: str, fmt: str) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def preprocess(input_path: str) -> str:
+def preprocess(input_path: str) -> list:
     """
     Group *input_path* by GROUP_BY_COLUMNS and apply the aggregation functions
     defined in AGGREGATIONS.

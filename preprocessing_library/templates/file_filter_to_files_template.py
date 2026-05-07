@@ -125,7 +125,7 @@ def _write_output(df: pd.DataFrame, out_path: str, fmt: str) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def preprocess(input_path: str) -> str:
+def preprocess(input_path: str) -> list:
     """
     Apply each rule in FILTER_RULES to the source file and write matching
     rows to the corresponding output file.  Rows that match no rule are
