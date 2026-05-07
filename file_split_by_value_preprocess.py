@@ -124,58 +124,85 @@ def _safe_filename(value: str) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def preprocess(input_path: str) -> list:
+def _process_one_file(df: pd.DataFrame, src_basename: str, out_dir: str) -> list:
     """
-    Split *input_path* into one file per distinct value in SPLIT_COLUMN.
-    Rows where SPLIT_COLUMN is null/NaN are written to a separate _NULL file.
-
-    Parameters
-    ----------
-    input_path : str
-        Path to the source file.
-
-    Returns
-    -------
-    list
-        List of absolute paths to the written output files.
+    Apply split-by-value logic to one DataFrame.
+    If SPLIT_COLUMN is absent the file is written as-is (preserving its name).
     """
-    if isinstance(input_path, list):
-        input_path = input_path[0]
-    df = _load_file(input_path)
+    paths: list = []
 
     if SPLIT_COLUMN not in df.columns:
-        raise KeyError(f"SPLIT_COLUMN '{SPLIT_COLUMN}' not found in file: {input_path}")
+        stem = _Path(src_basename).stem
+        out_path = os.path.join(out_dir, f"{stem}.{OUTPUT_FORMAT.lower()}")
+        paths.append(_write_output(df, out_path, OUTPUT_FORMAT))
+        return paths
 
-    _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_path))
-    os.makedirs(_out_dir, exist_ok=True)
+    stem = _Path(src_basename).stem
+    orig_out = os.path.join(out_dir, f"{stem}.{OUTPUT_FORMAT.lower()}")
+    paths.append(_write_output(df, orig_out, OUTPUT_FORMAT))
 
     null_mask   = df[SPLIT_COLUMN].isna()
     non_null_df = df[~null_mask]
     null_df     = df[null_mask]
 
-    output_paths: list = []
-
-    # Write one file per distinct non-null value
     for value in non_null_df[SPLIT_COLUMN].unique():
         subset = non_null_df[non_null_df[SPLIT_COLUMN] == value].copy()
         if not INCLUDE_SPLIT_COLUMN:
             subset = subset.drop(columns=[SPLIT_COLUMN])
-
         safe_val = _safe_filename(value)
-        filename = FILENAME_TEMPLATE.format(
-            split_column=SPLIT_COLUMN,
-            value=safe_val,
-        )
-        output_paths.append(_write_output(subset, os.path.join(_out_dir, filename), OUTPUT_FORMAT))
+        filename = FILENAME_TEMPLATE.format(split_column=SPLIT_COLUMN, value=safe_val)
+        paths.append(_write_output(subset, os.path.join(out_dir, filename), OUTPUT_FORMAT))
 
-    # Write null rows to a dedicated _NULL file
     if not null_df.empty:
         null_subset = null_df.copy()
         if not INCLUDE_SPLIT_COLUMN:
             null_subset = null_subset.drop(columns=[SPLIT_COLUMN])
         null_filename = f"{SPLIT_COLUMN}_NULL.{OUTPUT_FORMAT.lower()}"
-        output_paths.append(_write_output(null_subset, os.path.join(_out_dir, null_filename), OUTPUT_FORMAT))
+        paths.append(_write_output(null_subset, os.path.join(out_dir, null_filename), OUTPUT_FORMAT))
 
+    return paths
+
+
+def preprocess(input_path: str) -> list:
+    """
+    Split *input_path* into one file per distinct value in SPLIT_COLUMN.
+    Rows where SPLIT_COLUMN is null/NaN are written to a separate _NULL file.
+
+    If *input_path* is a ZIP, ALL files inside are extracted first.
+    Files that contain SPLIT_COLUMN are split by value.
+    Files that do NOT contain SPLIT_COLUMN are written as-is to OUTPUT_DIR.
+
+    Parameters
+    ----------
+    input_path : str | list
+        Path to the source file or ZIP archive.
+
+    Returns
+    -------
+    list
+        List of absolute paths to all written output files.
+    """
+    if isinstance(input_path, list):
+        input_path = input_path[0]
+
+    _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_path))
+    os.makedirs(_out_dir, exist_ok=True)
+    output_paths: list = []
+
+    if _Path(input_path).suffix.lower() == ".zip":
+        _supported = {".csv", ".tsv", ".txt", ".xlsx", ".xls", ".json", ".xml"}
+        with _tempfile.TemporaryDirectory() as tmp_dir:
+            with _zipfile.ZipFile(input_path, "r") as z:
+                names = [n for n in z.namelist() if _Path(n).suffix.lower() in _supported]
+                for name in names:
+                    z.extract(name, tmp_dir)
+            for name in names:
+                df = _load_file(os.path.join(tmp_dir, name))
+                output_paths.extend(_process_one_file(df, os.path.basename(name), _out_dir))
+        return output_paths
+
+    df = _load_file(input_path)
+    output_paths.extend(_process_one_file(df, os.path.basename(input_path), _out_dir))
     return output_paths
 
 
@@ -185,7 +212,7 @@ import os as _os
 # ── Run Configuration ───────────────────────────────────────────────────────
 # ── Set BASE_LOCATION to your input folder. File names are resolved from it. 
 # ─────────────────────────────────────────────────────────────────────────────
-BASE_LOCATION = r"C:/Users/91917/Desktop/Python_Scripts/test_data/test2"
+BASE_LOCATION = r"C:/Users/91917/Desktop/github/preprocessing_library/test_data/test2"
 
 INPUT_FILE = _os.path.join(BASE_LOCATION, "test_batch.zip")
 

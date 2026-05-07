@@ -138,6 +138,10 @@ def _process_one_file(df: pd.DataFrame, src_basename: str, out_dir: str) -> list
         paths.append(_write_output(df, out_path, OUTPUT_FORMAT))
         return paths
 
+    stem = _Path(src_basename).stem
+    orig_out = os.path.join(out_dir, f"{stem}.{OUTPUT_FORMAT.lower()}")
+    paths.append(_write_output(df, orig_out, OUTPUT_FORMAT))
+
     for group in COLUMN_GROUPS:
         group_cols      = group.get("columns", [])
         output_filename = group.get("output_filename", "")
