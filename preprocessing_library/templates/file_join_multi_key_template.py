@@ -158,6 +158,30 @@ def _expand_zip_inputs(input_paths: list) -> "tuple[list, object]":
     return expanded, tmp
 
 
+def _extract_zip_to_output(input_paths: list, out_dir: str) -> "tuple[list, list]":
+    """Extract all ZIP contents to out_dir. Returns (expanded_input_paths, all_extracted_paths)."""
+    import shutil as _shutil
+    _supported = {".csv", ".tsv", ".txt", ".xlsx", ".xls", ".json", ".xml"}
+    expanded: list = []
+    all_extracted: list = []
+    seen: set = set()
+    for p in input_paths:
+        abs_p = os.path.abspath(p)
+        if _Path(p).suffix.lower() == ".zip" and abs_p not in seen:
+            seen.add(abs_p)
+            with _zipfile.ZipFile(p, "r") as z:
+                names = [n for n in z.namelist() if _Path(n).suffix.lower() in _supported]
+                for name in names:
+                    dest = os.path.join(out_dir, os.path.basename(name))
+                    with z.open(name) as src_f, open(dest, "wb") as dst_f:
+                        _shutil.copyfileobj(src_f, dst_f)
+                    expanded.append(dest)
+                    all_extracted.append(dest)
+        else:
+            expanded.append(p)
+    return expanded, all_extracted
+
+
 def _find_input_file(input_paths: list, filename: str, fallback_idx: int = 0) -> str:
     """Return the path in *input_paths* whose basename matches *filename*.
     Falls back to input_paths[fallback_idx] if no match is found."""
@@ -209,9 +233,11 @@ def preprocess(input_paths: list) -> list:
     """
     if isinstance(input_paths, str):
         input_paths = [input_paths]
-    _tmp = None
+    _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_paths[0]))
+    os.makedirs(_out_dir, exist_ok=True)
+    all_extracted: list = []
     if any(_Path(p).suffix.lower() == ".zip" for p in input_paths):
-        input_paths, _tmp = _expand_zip_inputs(input_paths)
+        input_paths, all_extracted = _extract_zip_to_output(input_paths, _out_dir)
     if len(input_paths) < 2:
         raise ValueError(
             f"file_join_multi_key requires exactly 2 input files; got {len(input_paths)}."
@@ -272,8 +298,5 @@ def preprocess(input_paths: list) -> list:
     merged = _drop_columns(merged, OUTPUT_DROP_COLUMNS)
     merged = _insert_column_after(merged, INSERT_COLUMN, INSERT_AFTER_COLUMN)
 
-    _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_paths[0]))
     out_path = os.path.join(_out_dir, OUTPUT_FILENAME)
-    if _tmp is not None:
-        _tmp.cleanup()
-    return [_write_output(merged, out_path, OUTPUT_FORMAT)]
+    return all_extracted + [_write_output(merged, out_path, OUTPUT_FORMAT)]

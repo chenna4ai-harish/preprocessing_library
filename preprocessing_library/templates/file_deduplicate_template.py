@@ -136,8 +136,44 @@ def preprocess(input_path: str) -> list:
     list
         Absolute path to the deduplicated output file.
     """
+    if isinstance(input_path, list):
+        input_path = input_path[0]
+
+    _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_path))
+    os.makedirs(_out_dir, exist_ok=True)
+
+    if _Path(input_path).suffix.lower() == ".zip":
+        _supported = {".csv", ".tsv", ".txt", ".xlsx", ".xls", ".json", ".xml"}
+        output_paths: list = []
+        with _tempfile.TemporaryDirectory() as tmp_dir:
+            with _zipfile.ZipFile(input_path, "r") as z:
+                names = [n for n in z.namelist() if _Path(n).suffix.lower() in _supported]
+                for name in names:
+                    z.extract(name, tmp_dir)
+            for name in names:
+                df = _load_file(os.path.join(tmp_dir, name))
+                stem = _Path(os.path.basename(name)).stem
+                missing_keys = [c for c in KEY_COLUMNS if c not in df.columns]
+                if missing_keys:
+                    raise KeyError(
+                        f"KEY_COLUMNS {missing_keys} not found in file: {name}"
+                    )
+                dup_mask = df.duplicated(subset=KEY_COLUMNS, keep=False)
+                duplicates_df = df[dup_mask].copy()
+                if not duplicates_df.empty:
+                    dup_path = os.path.join(_out_dir, DUPLICATES_REPORT_FILENAME)
+                    _write_output(duplicates_df, dup_path, OUTPUT_FORMAT)
+                keep_arg: str | bool
+                if KEEP in ("first", "last"):
+                    keep_arg = KEEP
+                else:
+                    keep_arg = False
+                clean_df = df.drop_duplicates(subset=KEY_COLUMNS, keep=keep_arg)
+                out_path = os.path.join(_out_dir, f"{stem}.{OUTPUT_FORMAT.lower()}")
+                output_paths.append(_write_output(clean_df, out_path, OUTPUT_FORMAT))
+        return output_paths
+
     df = _load_file(input_path)
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     missing_keys = [c for c in KEY_COLUMNS if c not in df.columns]
     if missing_keys:
@@ -150,7 +186,7 @@ def preprocess(input_path: str) -> list:
     duplicates_df = df[dup_mask].copy()
 
     if not duplicates_df.empty:
-        dup_path = os.path.join(OUTPUT_DIR, DUPLICATES_REPORT_FILENAME)
+        dup_path = os.path.join(_out_dir, DUPLICATES_REPORT_FILENAME)
         _write_output(duplicates_df, dup_path, OUTPUT_FORMAT)
 
     # Resolve KEEP strategy
@@ -162,6 +198,5 @@ def preprocess(input_path: str) -> list:
 
     clean_df = df.drop_duplicates(subset=KEY_COLUMNS, keep=keep_arg)
 
-    _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_path))
     out_path = os.path.join(_out_dir, OUTPUT_FILENAME)
     return [_write_output(clean_df, out_path, OUTPUT_FORMAT)]

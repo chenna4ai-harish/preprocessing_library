@@ -144,6 +144,54 @@ def preprocess(input_path: str) -> list:
     list
         Absolute path to the aggregated output file.
     """
+    if isinstance(input_path, list):
+        input_path = input_path[0]
+
+    _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_path))
+    os.makedirs(_out_dir, exist_ok=True)
+
+    if _Path(input_path).suffix.lower() == ".zip":
+        _supported = {".csv", ".tsv", ".txt", ".xlsx", ".xls", ".json", ".xml"}
+        output_paths: list = []
+        with _tempfile.TemporaryDirectory() as tmp_dir:
+            with _zipfile.ZipFile(input_path, "r") as z:
+                names = [n for n in z.namelist() if _Path(n).suffix.lower() in _supported]
+                for name in names:
+                    z.extract(name, tmp_dir)
+            for name in names:
+                df = _load_file(os.path.join(tmp_dir, name))
+                stem = _Path(os.path.basename(name)).stem
+                missing_group = [c for c in GROUP_BY_COLUMNS if c not in df.columns]
+                if missing_group:
+                    raise KeyError(
+                        f"GROUP_BY_COLUMNS {missing_group} not found in file: {name}"
+                    )
+                standard_aggs: dict[str, str] = {}
+                concat_cols: list[str] = []
+                for agg in AGGREGATIONS:
+                    col  = agg.get("column", "")
+                    func = agg.get("function", "")
+                    if col not in df.columns:
+                        continue
+                    if func == "concat":
+                        concat_cols.append(col)
+                    else:
+                        standard_aggs[col] = func
+                if standard_aggs:
+                    result = df.groupby(GROUP_BY_COLUMNS, as_index=False).agg(standard_aggs)
+                else:
+                    result = df[GROUP_BY_COLUMNS].drop_duplicates().reset_index(drop=True)
+                for col in concat_cols:
+                    concat_agg = (
+                        df.groupby(GROUP_BY_COLUMNS)[col]
+                        .apply(lambda s: "|".join(s.dropna().astype(str)))
+                        .reset_index()
+                    )
+                    result = result.merge(concat_agg, on=GROUP_BY_COLUMNS, how="left")
+                out_path = os.path.join(_out_dir, f"{stem}.{OUTPUT_FORMAT.lower()}")
+                output_paths.append(_write_output(result, out_path, OUTPUT_FORMAT))
+        return output_paths
+
     df = _load_file(input_path)
 
     missing_group = [c for c in GROUP_BY_COLUMNS if c not in df.columns]
@@ -182,6 +230,5 @@ def preprocess(input_path: str) -> list:
         )
         result = result.merge(concat_agg, on=GROUP_BY_COLUMNS, how="left")
 
-    _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_path))
     out_path = os.path.join(_out_dir, OUTPUT_FILENAME)
     return [_write_output(result, out_path, OUTPUT_FORMAT)]

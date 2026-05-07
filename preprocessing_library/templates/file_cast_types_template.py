@@ -154,6 +154,103 @@ def preprocess(input_path: str) -> list:
     list
         Absolute path to the typed output file.
     """
+    if isinstance(input_path, list):
+        input_path = input_path[0]
+
+    _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_path))
+    os.makedirs(_out_dir, exist_ok=True)
+
+    if _Path(input_path).suffix.lower() == ".zip":
+        _supported = {".csv", ".tsv", ".txt", ".xlsx", ".xls", ".json", ".xml"}
+        output_paths: list = []
+        with _tempfile.TemporaryDirectory() as tmp_dir:
+            with _zipfile.ZipFile(input_path, "r") as z:
+                names = [n for n in z.namelist() if _Path(n).suffix.lower() in _supported]
+                for name in names:
+                    z.extract(name, tmp_dir)
+            for name in names:
+                df = _load_file(os.path.join(tmp_dir, name))
+                stem = _Path(os.path.basename(name)).stem
+                if TRIM_STRINGS:
+                    for col in df.select_dtypes(include=["object"]).columns:
+                        df[col] = df[col].astype(str).str.strip().replace("nan", pd.NA)
+                error_records: list[dict] = []
+                for rule in TYPE_RULES:
+                    col         = rule.get("column", "")
+                    target_type = rule.get("target_type", "string")
+                    if col not in df.columns:
+                        continue
+                    original = df[col].copy()
+                    if target_type == "string":
+                        df[col] = df[col].astype(str).str.strip().replace("nan", pd.NA)
+                    elif target_type in ("integer", "float"):
+                        if STRIP_CURRENCY:
+                            df[col] = (
+                                df[col].astype(str)
+                                .str.replace(r"[£$€,\s]", "", regex=True)
+                                .replace("nan", pd.NA)
+                            )
+                        numeric   = pd.to_numeric(df[col], errors="coerce")
+                        fail_mask = numeric.isna() & original.notna() & (
+                            original.astype(str).str.strip().replace("nan", "") != ""
+                        )
+                        if fail_mask.any():
+                            for idx in df.index[fail_mask]:
+                                error_records.append({
+                                    "row_index":      idx,
+                                    "column":         col,
+                                    "original_value": original.at[idx],
+                                    "target_type":    target_type,
+                                    "error":          "cast_failed",
+                                })
+                            if ON_ERROR == "nullify":
+                                df[col] = numeric
+                            elif ON_ERROR == "drop_row":
+                                df = df[~fail_mask].reset_index(drop=True)
+                                numeric = pd.to_numeric(df[col], errors="coerce")
+                                df[col] = numeric
+                            else:
+                                df.loc[~fail_mask, col] = numeric[~fail_mask]
+                        else:
+                            df[col] = numeric
+                        if target_type == "integer" and col in df.columns:
+                            df[col] = df[col].astype("Int64")
+                    elif target_type == "date":
+                        date_fmt  = rule.get("format", None)
+                        converted = pd.to_datetime(df[col], format=date_fmt, errors="coerce", dayfirst=False)
+                        fail_mask = converted.isna() & original.notna() & (
+                            original.astype(str).str.strip().replace("nan", "") != ""
+                        )
+                        if fail_mask.any():
+                            for idx in df.index[fail_mask]:
+                                error_records.append({
+                                    "row_index":      idx,
+                                    "column":         col,
+                                    "original_value": original.at[idx],
+                                    "target_type":    target_type,
+                                    "error":          f"cast_failed (expected format: {date_fmt})",
+                                })
+                            if ON_ERROR == "nullify":
+                                df[col] = converted
+                            elif ON_ERROR == "keep_original":
+                                df.loc[~fail_mask, col] = converted[~fail_mask]
+                            elif ON_ERROR == "drop_row":
+                                df = df[~fail_mask].reset_index(drop=True)
+                                df[col] = pd.to_datetime(df[col], format=date_fmt, errors="coerce")
+                        else:
+                            df[col] = converted
+                    elif target_type == "boolean":
+                        str_col = df[col].astype(str).str.lower().str.strip()
+                        df[col] = str_col.map(
+                            lambda v: True if v in _BOOL_TRUE else (False if v in _BOOL_FALSE else pd.NA)
+                        )
+                if error_records:
+                    err_df = pd.DataFrame(error_records)
+                    _write_output(err_df, os.path.join(_out_dir, CAST_ERROR_REPORT_FILENAME), OUTPUT_FORMAT)
+                out_path = os.path.join(_out_dir, f"{stem}.{OUTPUT_FORMAT.lower()}")
+                output_paths.append(_write_output(df, out_path, OUTPUT_FORMAT))
+        return output_paths
+
     df = _load_file(input_path)
 
     # Global string trimming (applied before type casting)
@@ -161,7 +258,6 @@ def preprocess(input_path: str) -> list:
         for col in df.select_dtypes(include=["object"]).columns:
             df[col] = df[col].astype(str).str.strip().replace("nan", pd.NA)
 
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
     error_records: list[dict] = []
 
     for rule in TYPE_RULES:
@@ -249,8 +345,7 @@ def preprocess(input_path: str) -> list:
     # Write cast error report
     if error_records:
         err_df = pd.DataFrame(error_records)
-        _write_output(err_df, os.path.join(OUTPUT_DIR, CAST_ERROR_REPORT_FILENAME), OUTPUT_FORMAT)
+        _write_output(err_df, os.path.join(_out_dir, CAST_ERROR_REPORT_FILENAME), OUTPUT_FORMAT)
 
-    _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_path))
     out_path = os.path.join(_out_dir, OUTPUT_FILENAME)
     return [_write_output(df, out_path, OUTPUT_FORMAT)]

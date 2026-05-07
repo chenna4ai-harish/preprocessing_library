@@ -180,13 +180,54 @@ def preprocess(input_path: str) -> list:
     list
         Absolute path to the cleaned output file.
     """
+    if isinstance(input_path, list):
+        input_path = input_path[0]
+
+    _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_path))
+    os.makedirs(_out_dir, exist_ok=True)
+
+    if _Path(input_path).suffix.lower() == ".zip":
+        _supported = {".csv", ".tsv", ".txt", ".xlsx", ".xls", ".json", ".xml"}
+        output_paths: list = []
+        with _tempfile.TemporaryDirectory() as tmp_dir:
+            with _zipfile.ZipFile(input_path, "r") as z:
+                names = [n for n in z.namelist() if _Path(n).suffix.lower() in _supported]
+                for name in names:
+                    z.extract(name, tmp_dir)
+            for name in names:
+                df = _load_file(os.path.join(tmp_dir, name))
+                stem = _Path(os.path.basename(name)).stem
+                if NULL_VALUES:
+                    df = df.replace(NULL_VALUES, pd.NA)
+                null_counts = df.isnull().sum()
+                audit_rows = []
+                total_rows = len(df)
+                for col, cnt in null_counts.items():
+                    if cnt > 0:
+                        audit_rows.append({
+                            "Column":     col,
+                            "Null_Count": cnt,
+                            "Total_Rows": total_rows,
+                            "Null_Pct":   round(cnt / total_rows * 100, 2) if total_rows else 0,
+                        })
+                audit_df = pd.DataFrame(audit_rows)
+                _write_output(audit_df, os.path.join(_out_dir, NULL_REPORT_FILENAME), OUTPUT_FORMAT)
+                for rule in NULL_RULES:
+                    col = rule.get("column", "")
+                    if col == "*":
+                        for c in list(df.columns):
+                            df = _apply_null_strategy(df, c, rule)
+                    elif col in df.columns:
+                        df = _apply_null_strategy(df, col, rule)
+                out_path = os.path.join(_out_dir, f"{stem}.{OUTPUT_FORMAT.lower()}")
+                output_paths.append(_write_output(df, out_path, OUTPUT_FORMAT))
+        return output_paths
+
     df = _load_file(input_path)
 
     # Normalise null representations
     if NULL_VALUES:
         df = df.replace(NULL_VALUES, pd.NA)
-
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     # Build and write null audit (before cleaning)
     null_counts = df.isnull().sum()
@@ -201,7 +242,7 @@ def preprocess(input_path: str) -> list:
                 "Null_Pct":   round(cnt / total_rows * 100, 2) if total_rows else 0,
             })
     audit_df = pd.DataFrame(audit_rows)
-    _write_output(audit_df, os.path.join(OUTPUT_DIR, NULL_REPORT_FILENAME), OUTPUT_FORMAT)
+    _write_output(audit_df, os.path.join(_out_dir, NULL_REPORT_FILENAME), OUTPUT_FORMAT)
 
     # Apply null-handling rules in order
     for rule in NULL_RULES:
@@ -212,6 +253,5 @@ def preprocess(input_path: str) -> list:
         elif col in df.columns:
             df = _apply_null_strategy(df, col, rule)
 
-    _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_path))
     out_path = os.path.join(_out_dir, OUTPUT_FILENAME)
     return [_write_output(df, out_path, OUTPUT_FORMAT)]

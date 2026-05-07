@@ -115,6 +115,50 @@ def _load_zip(file_path: str) -> pd.DataFrame:
     raise ValueError(f"No loadable file found inside ZIP: {file_path}")
 
 
+def _expand_zip_inputs(input_paths: list) -> "tuple[list, object]":
+    """Expand any ZIP files in input_paths; return (expanded_paths, tmp_dir_or_None)."""
+    _supported = {".csv", ".tsv", ".txt", ".xlsx", ".xls", ".json", ".xml"}
+    tmp = _tempfile.TemporaryDirectory()
+    expanded: list = []
+    seen: set = set()
+    for p in input_paths:
+        abs_p = os.path.abspath(p)
+        if _Path(p).suffix.lower() == ".zip" and abs_p not in seen:
+            seen.add(abs_p)
+            with _zipfile.ZipFile(p, "r") as z:
+                names = [n for n in z.namelist() if _Path(n).suffix.lower() in _supported]
+                for name in names:
+                    z.extract(name, tmp.name)
+                    expanded.append(os.path.join(tmp.name, name))
+        else:
+            expanded.append(p)
+    return expanded, tmp
+
+
+def _extract_zip_to_output(input_paths: list, out_dir: str) -> "tuple[list, list]":
+    """Extract all ZIP contents to out_dir. Returns (expanded_input_paths, all_extracted_paths)."""
+    import shutil as _shutil
+    _supported = {".csv", ".tsv", ".txt", ".xlsx", ".xls", ".json", ".xml"}
+    expanded: list = []
+    all_extracted: list = []
+    seen: set = set()
+    for p in input_paths:
+        abs_p = os.path.abspath(p)
+        if _Path(p).suffix.lower() == ".zip" and abs_p not in seen:
+            seen.add(abs_p)
+            with _zipfile.ZipFile(p, "r") as z:
+                names = [n for n in z.namelist() if _Path(n).suffix.lower() in _supported]
+                for name in names:
+                    dest = os.path.join(out_dir, os.path.basename(name))
+                    with z.open(name) as src_f, open(dest, "wb") as dst_f:
+                        _shutil.copyfileobj(src_f, dst_f)
+                    expanded.append(dest)
+                    all_extracted.append(dest)
+        else:
+            expanded.append(p)
+    return expanded, all_extracted
+
+
 def _write_output(df: pd.DataFrame, out_path: str, fmt: str) -> str:
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
     _fmt = fmt.lower()
@@ -158,6 +202,12 @@ def preprocess(input_paths: list) -> list:
         input_paths = [input_paths]
     if not input_paths:
         raise ValueError("input_paths is empty.")
+
+    _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_paths[0]))
+    os.makedirs(_out_dir, exist_ok=True)
+    all_extracted: list = []
+    if any(_Path(p).suffix.lower() == ".zip" for p in input_paths):
+        input_paths, all_extracted = _extract_zip_to_output(input_paths, _out_dir)
 
     # Resolve base file by name or fall back to first path
     if BASE_FILENAME:
@@ -212,6 +262,5 @@ def preprocess(input_paths: list) -> list:
             suffixes=(sfx_left, sfx_right),
         )
 
-    _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(base_path))
     out_path = os.path.join(_out_dir, OUTPUT_FILENAME)
-    return [_write_output(result, out_path, OUTPUT_FORMAT)]
+    return all_extracted + [_write_output(result, out_path, OUTPUT_FORMAT)]

@@ -168,6 +168,68 @@ def preprocess(input_path: str) -> list:
     list
         Absolute path to the ranked (and optionally filtered) output file.
     """
+    if isinstance(input_path, list):
+        input_path = input_path[0]
+
+    _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_path))
+    os.makedirs(_out_dir, exist_ok=True)
+
+    if _Path(input_path).suffix.lower() == ".zip":
+        _supported = {".csv", ".tsv", ".txt", ".xlsx", ".xls", ".json", ".xml"}
+        output_paths: list = []
+        with _tempfile.TemporaryDirectory() as tmp_dir:
+            with _zipfile.ZipFile(input_path, "r") as z:
+                names = [n for n in z.namelist() if _Path(n).suffix.lower() in _supported]
+                for name in names:
+                    z.extract(name, tmp_dir)
+            for name in names:
+                df = _load_file(os.path.join(tmp_dir, name))
+                stem = _Path(os.path.basename(name)).stem
+                if RANK_BY_COLUMN not in df.columns:
+                    raise KeyError(
+                        f"RANK_BY_COLUMN '{RANK_BY_COLUMN}' not found in file: {name}"
+                    )
+                missing_partition = [c for c in PARTITION_BY if c not in df.columns]
+                if missing_partition:
+                    raise KeyError(
+                        f"PARTITION_BY columns {missing_partition} not found in file: {name}"
+                    )
+                pandas_method = _RANK_METHOD_MAP.get(RANK_METHOD.lower())
+                if pandas_method is None:
+                    raise ValueError(
+                        f"Unknown RANK_METHOD '{RANK_METHOD}'. "
+                        f"Supported: {list(_RANK_METHOD_MAP.keys())}"
+                    )
+                ascending = RANK_ORDER.lower() == "asc"
+                if PARTITION_BY:
+                    df[RANK_COLUMN_NAME] = (
+                        df.groupby(PARTITION_BY)[RANK_BY_COLUMN]
+                        .rank(method=pandas_method, ascending=ascending, na_option="bottom")
+                        .astype(int)
+                    )
+                else:
+                    df[RANK_COLUMN_NAME] = (
+                        df[RANK_BY_COLUMN]
+                        .rank(method=pandas_method, ascending=ascending, na_option="bottom")
+                        .astype(int)
+                    )
+                if KEEP_TOP_N and KEEP_TOP_N > 0:
+                    keep_mask    = df[RANK_COLUMN_NAME] <= KEEP_TOP_N
+                    top_df       = df[keep_mask].copy()
+                    discarded_df = df[~keep_mask].copy()
+                    if DISCARD_FILENAME:
+                        _write_output(
+                            discarded_df,
+                            os.path.join(_out_dir, DISCARD_FILENAME),
+                            OUTPUT_FORMAT,
+                        )
+                    out_df = top_df
+                else:
+                    out_df = df
+                out_path = os.path.join(_out_dir, f"{stem}.{OUTPUT_FORMAT.lower()}")
+                output_paths.append(_write_output(out_df, out_path, OUTPUT_FORMAT))
+        return output_paths
+
     df = _load_file(input_path)
 
     # ── Validate columns ──────────────────────────────────────────────────────
@@ -207,8 +269,6 @@ def preprocess(input_path: str) -> list:
             .astype(int)
         )
 
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-
     # ── Filter by KEEP_TOP_N ──────────────────────────────────────────────────
     if KEEP_TOP_N and KEEP_TOP_N > 0:
         keep_mask    = df[RANK_COLUMN_NAME] <= KEEP_TOP_N
@@ -219,7 +279,7 @@ def preprocess(input_path: str) -> list:
         if DISCARD_FILENAME:
             _write_output(
                 discarded_df,
-                os.path.join(OUTPUT_DIR, DISCARD_FILENAME),
+                os.path.join(_out_dir, DISCARD_FILENAME),
                 OUTPUT_FORMAT,
             )
 
@@ -228,6 +288,5 @@ def preprocess(input_path: str) -> list:
         # KEEP_TOP_N == 0: keep all rows, just add rank column
         out_df = df
 
-    _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_path))
     out_path = os.path.join(_out_dir, OUTPUT_FILENAME)
     return [_write_output(out_df, out_path, OUTPUT_FORMAT)]
