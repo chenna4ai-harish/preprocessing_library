@@ -48,6 +48,7 @@ OUTPUT_FILENAME   = "{{OUTPUT_FILENAME}}"
 OUTPUT_FORMAT     = "{{OUTPUT_FORMAT}}"
 ADD_SOURCE_TAG    = {{ADD_SOURCE_TAG}}
 SOURCE_TAG_COLUMN = "{{SOURCE_TAG_COLUMN}}"
+INPUT_FILES       = "{{INPUT_FILES}}"       # comma-separated filenames to union; "" = all files
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -355,62 +356,81 @@ def _union_align_columns(
     return [df.reindex(columns=ordered_cols) for df in normalized_frames]
 
 
-def preprocess(input_paths: list, output_columns=None) -> list:
+def preprocess(input_path: str, input_files: str = "") -> list:
     """
-    Load all files in *input_paths*, optionally tag each row with its source
-    filename, concatenate vertically, and write to OUTPUT_DIR/OUTPUT_FILENAME.
+    Union (vertically stack) files from a ZIP, folder, or single file.
 
     Parameters
     ----------
-    input_paths : list[str]
-        Either file paths, or [input_dir, filename1, filename2, ...].
-    output_columns : list[str] | str | None
-        Optional enforced output schema (and column order). If a string is
-        provided, it can be a comma-separated list or a JSON list string.
+    input_path : str | list
+        ZIP file path, folder path, or a single file path.
+        Also accepts a list — first element is used as input_path.
+    input_files : str
+        Comma-separated filenames to pick from the ZIP or folder.
+        Example: "customers.csv,orders.csv"
+        If empty, ALL supported files inside the ZIP/folder are unioned.
+        Overrides INPUT_FILES config parameter when provided.
 
     Returns
     -------
     list
-        Absolute path to the unified output file.
+        All extracted/source files + the unified output file path.
     """
-    if isinstance(input_paths, str):
-        input_paths = [input_paths]
-    if not input_paths:
-        raise ValueError("input_paths is empty — at least one file is required.")
+    if isinstance(input_path, list):
+        input_path = input_path[0]
 
-    _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_paths[0]))
+    _files_param = input_files.strip() if input_files.strip() else INPUT_FILES.strip()
+    selected_names = [f.strip() for f in _files_param.split(",") if f.strip()]
+
+    _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_path))
     os.makedirs(_out_dir, exist_ok=True)
-    all_extracted: list = []
-    if any(_Path(p).suffix.lower() == ".zip" for p in input_paths):
-        input_paths, all_extracted = _extract_zip_to_output(input_paths, _out_dir)
 
-    resolved_paths = _resolve_input_paths(input_paths)
-    canonical_cols = _coerce_output_columns(output_columns)
+    _supported = {".csv", ".tsv", ".txt", ".xlsx", ".xls", ".json", ".xml"}
+    all_extracted: list = []
+    resolved_paths: list = []
+
+    if _Path(input_path).suffix.lower() == ".zip":
+        import shutil as _shutil
+        with _zipfile.ZipFile(input_path, "r") as z:
+            names = [n for n in z.namelist() if _Path(n).suffix.lower() in _supported]
+            for name in names:
+                dest = os.path.join(_out_dir, os.path.basename(name))
+                with z.open(name) as src_f, open(dest, "wb") as dst_f:
+                    _shutil.copyfileobj(src_f, dst_f)
+                all_extracted.append(dest)
+        if selected_names:
+            resolved_paths = [p for p in all_extracted if os.path.basename(p) in selected_names]
+        else:
+            resolved_paths = list(all_extracted)
+
+    elif _Path(input_path).is_dir():
+        all_files = sorted(
+            str(f) for f in _Path(input_path).iterdir()
+            if f.is_file() and f.suffix.lower() in _supported
+        )
+        all_extracted = all_files
+        if selected_names:
+            resolved_paths = [f for f in all_files if _Path(f).name in selected_names]
+        else:
+            resolved_paths = list(all_files)
+
+    else:
+        resolved_paths = [input_path]
+
+    if not resolved_paths:
+        raise ValueError(
+            f"No files to union. input_path='{input_path}', input_files='{_files_param or '(all)'}'"
+        )
 
     frames: list[pd.DataFrame] = []
     for path in resolved_paths:
         df = _load_file(path)
         df = _ensure_string_unique_columns(df)
+        if ADD_SOURCE_TAG:
+            df[SOURCE_TAG_COLUMN] = _Path(path).name
         frames.append(df)
 
-    if canonical_cols:
-        frames = _union_align_columns(frames, output_columns=canonical_cols)
-
-        if ADD_SOURCE_TAG:
-            for i, (path, df) in enumerate(zip(resolved_paths, frames)):
-                df = df.copy()
-                df[SOURCE_TAG_COLUMN] = _Path(path).name
-                frames[i] = df
-            final_cols = list(canonical_cols)
-            if SOURCE_TAG_COLUMN not in final_cols:
-                final_cols.append(SOURCE_TAG_COLUMN)
-            frames = [df.reindex(columns=final_cols) for df in frames]
-    else:
-        if ADD_SOURCE_TAG:
-            for i, path in enumerate(resolved_paths):
-                frames[i][SOURCE_TAG_COLUMN] = _Path(path).name
-        frames = _union_align_columns(frames)
-
+    frames = _union_align_columns(frames)
     combined = pd.concat(frames, ignore_index=True, sort=False)
     out_path = os.path.join(_out_dir, OUTPUT_FILENAME)
     return all_extracted + [_write_output(combined, out_path, OUTPUT_FORMAT)]
