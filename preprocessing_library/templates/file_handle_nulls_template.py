@@ -105,12 +105,13 @@ def _load_xml(file_path: str) -> pd.DataFrame:
 
 def _load_zip(file_path: str) -> pd.DataFrame:
     _supported = {".csv", ".tsv", ".txt", ".xlsx", ".xls", ".json", ".xml"}
-    with _zipfile.ZipFile(file_path, "r") as z:
-        for name in z.namelist():
-            if _Path(name).suffix.lower() in _supported:
-                with _tempfile.TemporaryDirectory() as tmp_dir:
-                    z.extract(name, tmp_dir)
-                    return _load_file(os.path.join(tmp_dir, name))
+    with _tempfile.TemporaryDirectory() as tmp_dir:
+        with _zipfile.ZipFile(file_path, "r") as z:
+            names = [n for n in z.namelist() if _Path(n).suffix.lower() in _supported]
+            for name in names:
+                z.extract(name, tmp_dir)
+        if names:
+            return _load_file(os.path.join(tmp_dir, names[0]))
     raise ValueError(f"No loadable file found inside ZIP: {file_path}")
 
 
@@ -164,7 +165,7 @@ def _apply_null_strategy(df: pd.DataFrame, col: str, rule: dict) -> pd.DataFrame
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def preprocess(input_path: str) -> str:
+def preprocess(input_path: str) -> list:
     """
     Load *input_path*, replace NULL_VALUES string representations with pd.NA,
     write a null audit report, apply NULL_RULES, and write cleaned data.
@@ -176,7 +177,7 @@ def preprocess(input_path: str) -> str:
 
     Returns
     -------
-    str
+    list
         Absolute path to the cleaned output file.
     """
     df = _load_file(input_path)
@@ -213,4 +214,4 @@ def preprocess(input_path: str) -> str:
 
     _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_path))
     out_path = os.path.join(_out_dir, OUTPUT_FILENAME)
-    return _write_output(df, out_path, OUTPUT_FORMAT)
+    return [_write_output(df, out_path, OUTPUT_FORMAT)]

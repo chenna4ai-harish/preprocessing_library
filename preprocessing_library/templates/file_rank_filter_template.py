@@ -115,12 +115,13 @@ def _load_xml(file_path: str) -> pd.DataFrame:
 
 def _load_zip(file_path: str) -> pd.DataFrame:
     _supported = {".csv", ".tsv", ".txt", ".xlsx", ".xls", ".json", ".xml"}
-    with _zipfile.ZipFile(file_path, "r") as z:
-        for name in z.namelist():
-            if _Path(name).suffix.lower() in _supported:
-                with _tempfile.TemporaryDirectory() as tmp_dir:
-                    z.extract(name, tmp_dir)
-                    return _load_file(os.path.join(tmp_dir, name))
+    with _tempfile.TemporaryDirectory() as tmp_dir:
+        with _zipfile.ZipFile(file_path, "r") as z:
+            names = [n for n in z.namelist() if _Path(n).suffix.lower() in _supported]
+            for name in names:
+                z.extract(name, tmp_dir)
+        if names:
+            return _load_file(os.path.join(tmp_dir, names[0]))
     raise ValueError(f"No loadable file found inside ZIP: {file_path}")
 
 
@@ -152,7 +153,7 @@ _RANK_METHOD_MAP = {
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def preprocess(input_path: str) -> str:
+def preprocess(input_path: str) -> list:
     """
     Rank rows within each group defined by PARTITION_BY, then optionally
     filter to the top KEEP_TOP_N rows per group.
@@ -164,7 +165,7 @@ def preprocess(input_path: str) -> str:
 
     Returns
     -------
-    str
+    list
         Absolute path to the ranked (and optionally filtered) output file.
     """
     df = _load_file(input_path)
@@ -229,4 +230,4 @@ def preprocess(input_path: str) -> str:
 
     _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_path))
     out_path = os.path.join(_out_dir, OUTPUT_FILENAME)
-    return _write_output(out_df, out_path, OUTPUT_FORMAT)
+    return [_write_output(out_df, out_path, OUTPUT_FORMAT)]

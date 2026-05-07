@@ -5,7 +5,7 @@ Purpose  : Apply one or more pandas query conditions to a source file and
            route matching rows to separate named output files.
            Rows matching no condition are written to UNMATCHED_FILENAME
            (or discarded if UNMATCHED_FILENAME is empty string).
-Contract : preprocess(input_path: str) -> str   (returns OUTPUT_DIR)
+Contract : preprocess(input_path: str) -> list
 
 FILTER_RULES format (Python list literal injected at generation time):
     [
@@ -95,12 +95,13 @@ def _load_xml(file_path: str) -> pd.DataFrame:
 
 def _load_zip(file_path: str) -> pd.DataFrame:
     _supported = {".csv", ".tsv", ".txt", ".xlsx", ".xls", ".json", ".xml"}
-    with _zipfile.ZipFile(file_path, "r") as z:
-        for name in z.namelist():
-            if _Path(name).suffix.lower() in _supported:
-                with _tempfile.TemporaryDirectory() as tmp_dir:
-                    z.extract(name, tmp_dir)
-                    return _load_file(os.path.join(tmp_dir, name))
+    with _tempfile.TemporaryDirectory() as tmp_dir:
+        with _zipfile.ZipFile(file_path, "r") as z:
+            names = [n for n in z.namelist() if _Path(n).suffix.lower() in _supported]
+            for name in names:
+                z.extract(name, tmp_dir)
+        if names:
+            return _load_file(os.path.join(tmp_dir, names[0]))
     raise ValueError(f"No loadable file found inside ZIP: {file_path}")
 
 
@@ -124,7 +125,7 @@ def _write_output(df: pd.DataFrame, out_path: str, fmt: str) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def preprocess(input_path: str) -> str:
+def preprocess(input_path: str) -> list:
     """
     Apply each rule in FILTER_RULES to the source file and write matching
     rows to the corresponding output file.  Rows that match no rule are
@@ -137,14 +138,17 @@ def preprocess(input_path: str) -> str:
 
     Returns
     -------
-    str
-        Absolute path to OUTPUT_DIR.
+    list
+        List of absolute paths to the written output files.
     """
+    if isinstance(input_path, list):
+        input_path = input_path[0]
     df = _load_file(input_path)
     _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_path))
     os.makedirs(_out_dir, exist_ok=True)
 
     matched_index: set = set()
+    output_paths: list = []
 
     for rule in FILTER_RULES:
         condition       = rule.get("condition", "")
@@ -164,16 +168,16 @@ def preprocess(input_path: str) -> str:
             ) from exc
 
         matched_index.update(matched.index.tolist())
-        _write_output(matched, os.path.join(_out_dir, output_filename), OUTPUT_FORMAT)
+        output_paths.append(_write_output(matched, os.path.join(_out_dir, output_filename), OUTPUT_FORMAT))
 
     # Handle unmatched rows
     if UNMATCHED_FILENAME:
         unmatched = df[~df.index.isin(matched_index)]
         if not unmatched.empty:
-            _write_output(
+            output_paths.append(_write_output(
                 unmatched,
                 os.path.join(_out_dir, UNMATCHED_FILENAME),
                 OUTPUT_FORMAT,
-            )
+            ))
 
-    return os.path.abspath(_out_dir)
+    return output_paths
