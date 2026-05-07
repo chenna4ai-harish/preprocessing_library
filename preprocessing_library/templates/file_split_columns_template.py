@@ -123,54 +123,75 @@ def _write_output(df: pd.DataFrame, out_path: str, fmt: str) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+def _process_one_file(df: pd.DataFrame, src_basename: str, out_dir: str) -> list:
+    """
+    Apply column-group splitting to one DataFrame.
+    If COMMON_KEY_COLUMNS are absent, the file is written as-is (pass-through).
+    Returns list of output paths written.
+    """
+    paths: list = []
+
+    missing_keys = [c for c in COMMON_KEY_COLUMNS if c not in df.columns]
+    if missing_keys:
+        stem = _Path(src_basename).stem
+        out_path = os.path.join(out_dir, f"{stem}.{OUTPUT_FORMAT.lower()}")
+        paths.append(_write_output(df, out_path, OUTPUT_FORMAT))
+        return paths
+
+    for group in COLUMN_GROUPS:
+        group_cols      = group.get("columns", [])
+        output_filename = group.get("output_filename", "")
+        if not output_filename:
+            raise ValueError(
+                f"Each COLUMN_GROUPS entry must have 'output_filename'. Got: {group}"
+            )
+        select    = COMMON_KEY_COLUMNS + [c for c in group_cols if c not in COMMON_KEY_COLUMNS]
+        available = [c for c in select if c in df.columns]
+        subset    = df[available].copy()
+        paths.append(_write_output(subset, os.path.join(out_dir, output_filename), OUTPUT_FORMAT))
+
+    return paths
+
+
 def preprocess(input_path: str) -> list:
     """
     Split *input_path* into multiple narrower files.  Each output file
     contains COMMON_KEY_COLUMNS plus the columns defined in its group entry.
     Columns listed in a group but absent from the source are silently skipped.
 
+    If *input_path* is a ZIP, ALL files inside are extracted first.
+    Files that contain COMMON_KEY_COLUMNS are split into column groups;
+    files that do not are written as-is to OUTPUT_DIR.
+
     Parameters
     ----------
-    input_path : str
-        Path to the wide source file.
+    input_path : str | list
+        Path to the wide source file or ZIP archive.
 
     Returns
     -------
     list
-        List of absolute paths to the written output files.
+        List of absolute paths to all written output files.
     """
     if isinstance(input_path, list):
         input_path = input_path[0]
-    df = _load_file(input_path)
+
     _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_path))
     os.makedirs(_out_dir, exist_ok=True)
-
-    # Validate key columns
-    missing_keys = [c for c in COMMON_KEY_COLUMNS if c not in df.columns]
-    if missing_keys:
-        raise KeyError(
-            f"COMMON_KEY_COLUMNS {missing_keys} not found in file: {input_path}"
-        )
-
     output_paths: list = []
 
-    for group in COLUMN_GROUPS:
-        group_cols      = group.get("columns", [])
-        output_filename = group.get("output_filename", "")
+    if _Path(input_path).suffix.lower() == ".zip":
+        _supported = {".csv", ".tsv", ".txt", ".xlsx", ".xls", ".json", ".xml"}
+        with _tempfile.TemporaryDirectory() as tmp_dir:
+            with _zipfile.ZipFile(input_path, "r") as z:
+                names = [n for n in z.namelist() if _Path(n).suffix.lower() in _supported]
+                for name in names:
+                    z.extract(name, tmp_dir)
+            for name in names:
+                df = _load_file(os.path.join(tmp_dir, name))
+                output_paths.extend(_process_one_file(df, os.path.basename(name), _out_dir))
+        return output_paths
 
-        if not output_filename:
-            raise ValueError(
-                f"Each COLUMN_GROUPS entry must have 'output_filename'. Got: {group}"
-            )
-
-        # Merge key columns + group columns, deduplicate, keep order
-        select = COMMON_KEY_COLUMNS + [
-            c for c in group_cols if c not in COMMON_KEY_COLUMNS
-        ]
-        # Only keep columns that actually exist
-        available = [c for c in select if c in df.columns]
-
-        subset = df[available].copy()
-        output_paths.append(_write_output(subset, os.path.join(_out_dir, output_filename), OUTPUT_FORMAT))
-
+    df = _load_file(input_path)
+    output_paths.extend(_process_one_file(df, os.path.basename(input_path), _out_dir))
     return output_paths

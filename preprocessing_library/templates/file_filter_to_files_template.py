@@ -125,59 +125,94 @@ def _write_output(df: pd.DataFrame, out_path: str, fmt: str) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+def _process_one_file(df: pd.DataFrame, src_basename: str, out_dir: str) -> list:
+    """
+    Apply FILTER_RULES to one DataFrame.
+    If no rule condition can be evaluated (columns missing), the file is
+    written as-is to out_dir (pass-through).
+    Returns list of output paths written.
+    """
+    paths: list = []
+    matched_index: set = set()
+    rule_results: list = []
+    any_rule_applied = False
+
+    for rule in FILTER_RULES:
+        condition       = rule.get("condition", "")
+        output_filename = rule.get("output_filename", "")
+        if not condition or not output_filename:
+            raise ValueError(
+                f"Each FILTER_RULES entry must have 'condition' and "
+                f"'output_filename'. Got: {rule}"
+            )
+        try:
+            matched = df.query(condition)
+            any_rule_applied = True
+        except Exception:
+            matched = df.iloc[0:0]
+        matched_index.update(matched.index.tolist())
+        rule_results.append((matched, output_filename))
+
+    if not any_rule_applied:
+        stem = _Path(src_basename).stem
+        out_path = os.path.join(out_dir, f"{stem}.{OUTPUT_FORMAT.lower()}")
+        paths.append(_write_output(df, out_path, OUTPUT_FORMAT))
+        return paths
+
+    for matched, output_filename in rule_results:
+        paths.append(_write_output(matched, os.path.join(out_dir, output_filename), OUTPUT_FORMAT))
+
+    if UNMATCHED_FILENAME:
+        unmatched = df[~df.index.isin(matched_index)]
+        if not unmatched.empty:
+            paths.append(_write_output(
+                unmatched,
+                os.path.join(out_dir, UNMATCHED_FILENAME),
+                OUTPUT_FORMAT,
+            ))
+
+    return paths
+
+
 def preprocess(input_path: str) -> list:
     """
     Apply each rule in FILTER_RULES to the source file and write matching
     rows to the corresponding output file.  Rows that match no rule are
     optionally written to UNMATCHED_FILENAME.
 
+    If *input_path* is a ZIP, ALL files inside are extracted first.
+    Files where filter conditions apply are routed to output files; files
+    where no condition can be evaluated are written as-is to OUTPUT_DIR.
+
     Parameters
     ----------
-    input_path : str
-        Path to the source file.
+    input_path : str | list
+        Path to the source file or ZIP archive.
 
     Returns
     -------
     list
-        List of absolute paths to the written output files.
+        List of absolute paths to all written output files.
     """
     if isinstance(input_path, list):
         input_path = input_path[0]
-    df = _load_file(input_path)
+
     _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_path))
     os.makedirs(_out_dir, exist_ok=True)
-
-    matched_index: set = set()
     output_paths: list = []
 
-    for rule in FILTER_RULES:
-        condition       = rule.get("condition", "")
-        output_filename = rule.get("output_filename", "")
+    if _Path(input_path).suffix.lower() == ".zip":
+        _supported = {".csv", ".tsv", ".txt", ".xlsx", ".xls", ".json", ".xml"}
+        with _tempfile.TemporaryDirectory() as tmp_dir:
+            with _zipfile.ZipFile(input_path, "r") as z:
+                names = [n for n in z.namelist() if _Path(n).suffix.lower() in _supported]
+                for name in names:
+                    z.extract(name, tmp_dir)
+            for name in names:
+                df = _load_file(os.path.join(tmp_dir, name))
+                output_paths.extend(_process_one_file(df, os.path.basename(name), _out_dir))
+        return output_paths
 
-        if not condition or not output_filename:
-            raise ValueError(
-                f"Each FILTER_RULES entry must have 'condition' and "
-                f"'output_filename'. Got: {rule}"
-            )
-
-        try:
-            matched = df.query(condition)
-        except Exception as exc:
-            raise ValueError(
-                f"Invalid filter condition '{condition}': {exc}"
-            ) from exc
-
-        matched_index.update(matched.index.tolist())
-        output_paths.append(_write_output(matched, os.path.join(_out_dir, output_filename), OUTPUT_FORMAT))
-
-    # Handle unmatched rows
-    if UNMATCHED_FILENAME:
-        unmatched = df[~df.index.isin(matched_index)]
-        if not unmatched.empty:
-            output_paths.append(_write_output(
-                unmatched,
-                os.path.join(_out_dir, UNMATCHED_FILENAME),
-                OUTPUT_FORMAT,
-            ))
-
+    df = _load_file(input_path)
+    output_paths.extend(_process_one_file(df, os.path.basename(input_path), _out_dir))
     return output_paths

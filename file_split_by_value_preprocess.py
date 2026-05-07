@@ -19,11 +19,11 @@ from pathlib import Path as _Path
 import pandas as pd
 
 # ── Configuration (substituted at generation time) ────────────────────────────
-SPLIT_COLUMN         = "{{SPLIT_COLUMN}}"
-OUTPUT_DIR           = "{{OUTPUT_DIR}}"
-OUTPUT_FORMAT        = "{{OUTPUT_FORMAT}}"
-FILENAME_TEMPLATE    = "{{FILENAME_TEMPLATE}}"
-INCLUDE_SPLIT_COLUMN = {{INCLUDE_SPLIT_COLUMN}}
+SPLIT_COLUMN         = "Country Code"
+OUTPUT_DIR           = ""
+OUTPUT_FORMAT        = "csv"
+FILENAME_TEMPLATE    = "customers_{value}.csv"
+INCLUDE_SPLIT_COLUMN = True
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -124,79 +124,71 @@ def _safe_filename(value: str) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _process_one_file(df: pd.DataFrame, src_basename: str, out_dir: str) -> list:
-    """
-    Apply split-by-value logic to one DataFrame.
-    If SPLIT_COLUMN is absent the file is written as-is (preserving its name).
-    """
-    paths: list = []
-
-    if SPLIT_COLUMN not in df.columns:
-        stem = _Path(src_basename).stem
-        out_path = os.path.join(out_dir, f"{stem}.{OUTPUT_FORMAT.lower()}")
-        paths.append(_write_output(df, out_path, OUTPUT_FORMAT))
-        return paths
-
-    null_mask   = df[SPLIT_COLUMN].isna()
-    non_null_df = df[~null_mask]
-    null_df     = df[null_mask]
-
-    for value in non_null_df[SPLIT_COLUMN].unique():
-        subset = non_null_df[non_null_df[SPLIT_COLUMN] == value].copy()
-        if not INCLUDE_SPLIT_COLUMN:
-            subset = subset.drop(columns=[SPLIT_COLUMN])
-        safe_val = _safe_filename(value)
-        filename = FILENAME_TEMPLATE.format(split_column=SPLIT_COLUMN, value=safe_val)
-        paths.append(_write_output(subset, os.path.join(out_dir, filename), OUTPUT_FORMAT))
-
-    if not null_df.empty:
-        null_subset = null_df.copy()
-        if not INCLUDE_SPLIT_COLUMN:
-            null_subset = null_subset.drop(columns=[SPLIT_COLUMN])
-        null_filename = f"{SPLIT_COLUMN}_NULL.{OUTPUT_FORMAT.lower()}"
-        paths.append(_write_output(null_subset, os.path.join(out_dir, null_filename), OUTPUT_FORMAT))
-
-    return paths
-
-
 def preprocess(input_path: str) -> list:
     """
     Split *input_path* into one file per distinct value in SPLIT_COLUMN.
     Rows where SPLIT_COLUMN is null/NaN are written to a separate _NULL file.
 
-    If *input_path* is a ZIP, ALL files inside are extracted first.
-    Files that contain SPLIT_COLUMN are split by value.
-    Files that do NOT contain SPLIT_COLUMN are written as-is to OUTPUT_DIR.
-
     Parameters
     ----------
-    input_path : str | list
-        Path to the source file or ZIP archive.
+    input_path : str
+        Path to the source file.
 
     Returns
     -------
     list
-        List of absolute paths to all written output files.
+        List of absolute paths to the written output files.
     """
     if isinstance(input_path, list):
         input_path = input_path[0]
+    df = _load_file(input_path)
+
+    if SPLIT_COLUMN not in df.columns:
+        raise KeyError(f"SPLIT_COLUMN '{SPLIT_COLUMN}' not found in file: {input_path}")
 
     _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_path))
     os.makedirs(_out_dir, exist_ok=True)
+
+    null_mask   = df[SPLIT_COLUMN].isna()
+    non_null_df = df[~null_mask]
+    null_df     = df[null_mask]
+
     output_paths: list = []
 
-    if _Path(input_path).suffix.lower() == ".zip":
-        _supported = {".csv", ".tsv", ".txt", ".xlsx", ".xls", ".json", ".xml"}
-        with _tempfile.TemporaryDirectory() as tmp_dir:
-            with _zipfile.ZipFile(input_path, "r") as z:
-                names = [n for n in z.namelist() if _Path(n).suffix.lower() in _supported]
-                for name in names:
-                    z.extract(name, tmp_dir)
-            for name in names:
-                df = _load_file(os.path.join(tmp_dir, name))
-                output_paths.extend(_process_one_file(df, os.path.basename(name), _out_dir))
-        return output_paths
+    # Write one file per distinct non-null value
+    for value in non_null_df[SPLIT_COLUMN].unique():
+        subset = non_null_df[non_null_df[SPLIT_COLUMN] == value].copy()
+        if not INCLUDE_SPLIT_COLUMN:
+            subset = subset.drop(columns=[SPLIT_COLUMN])
 
-    df = _load_file(input_path)
-    output_paths.extend(_process_one_file(df, os.path.basename(input_path), _out_dir))
+        safe_val = _safe_filename(value)
+        filename = FILENAME_TEMPLATE.format(
+            split_column=SPLIT_COLUMN,
+            value=safe_val,
+        )
+        output_paths.append(_write_output(subset, os.path.join(_out_dir, filename), OUTPUT_FORMAT))
+
+    # Write null rows to a dedicated _NULL file
+    if not null_df.empty:
+        null_subset = null_df.copy()
+        if not INCLUDE_SPLIT_COLUMN:
+            null_subset = null_subset.drop(columns=[SPLIT_COLUMN])
+        null_filename = f"{SPLIT_COLUMN}_NULL.{OUTPUT_FORMAT.lower()}"
+        output_paths.append(_write_output(null_subset, os.path.join(_out_dir, null_filename), OUTPUT_FORMAT))
+
     return output_paths
+
+
+import os as _os
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ── Run Configuration ───────────────────────────────────────────────────────
+# ── Set BASE_LOCATION to your input folder. File names are resolved from it. 
+# ─────────────────────────────────────────────────────────────────────────────
+BASE_LOCATION = r"C:/Users/91917/Desktop/Python_Scripts/test_data/test2"
+
+INPUT_FILE = _os.path.join(BASE_LOCATION, "test_batch.zip")
+
+if __name__ == "__main__":
+    result = preprocess(INPUT_FILE)
+    print(f"Output: {result}")
