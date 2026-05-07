@@ -181,11 +181,12 @@ TEMPLATE_CATALOG: dict[str, dict] = {
 
     "file_union": {
         "display_name": "PS-02 — File Union (Vertical Stack)",
-        "description":  "Vertically stack multiple files. Handles column mismatches, optional source tagging.",
-        "function_sig": "preprocess(input_paths: list, output_columns=None) -> str",
-        "input_type":   "multi",
+        "description":  "Vertically stack files from a ZIP, folder, or single file. Optionally pick specific files to union via INPUT_FILES.",
+        "function_sig": "preprocess(input_path: str, input_files: str = '') -> list",
+        "input_type":   "single",
         "parameters": [
-            {"name": "OUTPUT_DIR",        "type": "str",  "default": "",     "help": "Directory to write the output file."},
+            {"name": "INPUT_FILES",       "type": "str",  "default": "",             "help": "Comma-separated filenames to union from the ZIP or folder (e.g. customers.csv,orders.csv). Empty = union ALL files."},
+            {"name": "OUTPUT_DIR",        "type": "str",  "default": "",             "help": "Directory to write the output file."},
             {"name": "OUTPUT_FILENAME",   "type": "str",  "default": "union.csv",    "help": "Name of the output file."},
             {"name": "OUTPUT_FORMAT",     "type": "str",  "default": "csv",          "help": "csv | xlsx | json | parquet | tsv"},
             {"name": "ADD_SOURCE_TAG",    "type": "bool", "default": "True",         "help": "Add a column showing which file each row came from."},
@@ -704,7 +705,7 @@ _TEMPLATE_CATEGORIES["All"] = [k for k in TEMPLATE_CATALOG]
 # ---------------------------------------------------------------------------
 _INPUT_FILE_CONFIG: dict[str, list[dict]] = {
     "file_detect_load":     [{"label": "Input File",                   "key": "input_path"}],
-    "file_union":           [{"label": "Input Files (comma-separated paths or folder path)", "key": "input_paths", "multi": True}],
+    "file_union":           [{"label": "Input File (ZIP, folder, or single file)",           "key": "input_path"}],
     "file_join_two":        [{"label": "Left File",                    "key": "left_path"},
                              {"label": "Right File",                   "key": "right_path"}],
     "file_join_multi":      [{"label": "Input Files (comma-separated paths)",                "key": "input_paths", "multi": True}],
