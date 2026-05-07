@@ -4,7 +4,7 @@ Template : file_delta_load  |  PS-15
 Purpose  : Compare a current file against a baseline file and extract only
            records that are new, changed, or deleted.
            A DELTA_STATUS_COLUMN is added: 'NEW' | 'CHANGED' | 'DELETED'.
-Contract : preprocess(input_paths: list) -> str
+Contract : preprocess(input_paths: list) -> list
            input_paths[0] = current (new) file
            input_paths[1] = baseline (previous) file
 
@@ -144,6 +144,26 @@ def _write_output(df: pd.DataFrame, out_path: str, fmt: str) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+def _expand_zip_inputs(input_paths: list) -> "tuple[list, object]":
+    """Expand any ZIP files in input_paths; return (expanded_paths, tmp_dir_or_None)."""
+    _supported = {".csv", ".tsv", ".txt", ".xlsx", ".xls", ".json", ".xml"}
+    tmp = _tempfile.TemporaryDirectory()
+    expanded: list = []
+    seen: set = set()
+    for p in input_paths:
+        abs_p = os.path.abspath(p)
+        if _Path(p).suffix.lower() == ".zip" and abs_p not in seen:
+            seen.add(abs_p)
+            with _zipfile.ZipFile(p, "r") as z:
+                names = [n for n in z.namelist() if _Path(n).suffix.lower() in _supported]
+                for name in names:
+                    z.extract(name, tmp.name)
+                    expanded.append(os.path.join(tmp.name, name))
+        else:
+            expanded.append(p)
+    return expanded, tmp
+
+
 def _find_input_file(input_paths: list, filename: str, fallback_idx: int = 0) -> str:
     """Return the path in *input_paths* whose basename matches *filename*.
     Falls back to input_paths[fallback_idx] if no match is found."""
@@ -177,7 +197,7 @@ def _insert_column_after(df: pd.DataFrame, col: str, after: str) -> pd.DataFrame
     return df[cols]
 
 
-def preprocess(input_paths: list) -> str:
+def preprocess(input_paths: list) -> list:
     """
     Compare NEW_FILENAME (current) against OLD_FILENAME (baseline) and
     extract delta records according to DELTA_MODE.
@@ -199,9 +219,14 @@ def preprocess(input_paths: list) -> str:
 
     Returns
     -------
-    str
+    list
         Absolute path to the delta output file.
     """
+    if isinstance(input_paths, str):
+        input_paths = [input_paths]
+    _tmp = None
+    if any(_Path(p).suffix.lower() == ".zip" for p in input_paths):
+        input_paths, _tmp = _expand_zip_inputs(input_paths)
     if len(input_paths) < 2:
         raise ValueError(
             "file_delta_load requires 2 input files: [new/current, old/baseline]."
@@ -298,4 +323,6 @@ def preprocess(input_paths: list) -> str:
 
     _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_paths[0]))
     out_path = os.path.join(_out_dir, OUTPUT_FILENAME)
-    return _write_output(result, out_path, OUTPUT_FORMAT)
+    if _tmp is not None:
+        _tmp.cleanup()
+    return [_write_output(result, out_path, OUTPUT_FORMAT)]

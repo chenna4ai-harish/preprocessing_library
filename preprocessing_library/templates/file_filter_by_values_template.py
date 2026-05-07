@@ -6,7 +6,7 @@ Purpose  : Filter a single column against one or more value lists.
            All rows that do NOT match any group (including nulls) are routed to
            OTHERS_FILENAME — or silently dropped if OTHERS_FILENAME is empty.
 
-Contract : preprocess(input_path: str) -> str   (returns OUTPUT_DIR)
+Contract : preprocess(input_path: str) -> list
 
 VALUE_GROUPS format (Python list literal injected at generation time):
     [
@@ -176,9 +176,11 @@ def preprocess(input_path: str) -> str:
 
     Returns
     -------
-    str
-        Absolute path to OUTPUT_DIR.
+    list
+        List of absolute paths to the written output files.
     """
+    if isinstance(input_path, list):
+        input_path = input_path[0]
     df = _load_file(input_path)
 
     if FILTER_COLUMN not in df.columns:
@@ -193,6 +195,7 @@ def preprocess(input_path: str) -> str:
 
     # Track which rows have already been claimed by a group (first-match wins)
     claimed = pd.Series(False, index=df.index)
+    output_paths: list = []
 
     for group in VALUE_GROUPS:
         values          = group.get("values", [])
@@ -214,19 +217,19 @@ def preprocess(input_path: str) -> str:
         # Mark these rows as claimed before writing
         claimed |= match_mask
 
-        _write_output(
+        output_paths.append(_write_output(
             matched_rows,
             os.path.join(_out_dir, output_filename),
             OUTPUT_FORMAT,
-        )
+        ))
 
     # All unclaimed rows (no match + nulls) → OTHERS_FILENAME
     others = df[~claimed].copy()
     if OTHERS_FILENAME and not others.empty:
-        _write_output(
+        output_paths.append(_write_output(
             others,
             os.path.join(_out_dir, OTHERS_FILENAME),
             OUTPUT_FORMAT,
-        )
+        ))
 
-    return os.path.abspath(_out_dir)
+    return output_paths

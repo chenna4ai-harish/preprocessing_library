@@ -4,7 +4,7 @@ Template : file_split_columns  |  PS-09
 Purpose  : Split a wide file (many columns) into multiple narrower files.
            COMMON_KEY_COLUMNS are retained in every output file.
            Each entry in COLUMN_GROUPS defines a subset of columns + filename.
-Contract : preprocess(input_path: str) -> str   (returns OUTPUT_DIR)
+Contract : preprocess(input_path: str) -> list
 
 COLUMN_GROUPS format (Python list literal injected at generation time):
     [
@@ -136,9 +136,11 @@ def preprocess(input_path: str) -> str:
 
     Returns
     -------
-    str
-        Absolute path to OUTPUT_DIR (contains all split files).
+    list
+        List of absolute paths to the written output files.
     """
+    if isinstance(input_path, list):
+        input_path = input_path[0]
     df = _load_file(input_path)
     _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_path))
     os.makedirs(_out_dir, exist_ok=True)
@@ -149,6 +151,8 @@ def preprocess(input_path: str) -> str:
         raise KeyError(
             f"COMMON_KEY_COLUMNS {missing_keys} not found in file: {input_path}"
         )
+
+    output_paths: list = []
 
     for group in COLUMN_GROUPS:
         group_cols      = group.get("columns", [])
@@ -167,6 +171,6 @@ def preprocess(input_path: str) -> str:
         available = [c for c in select if c in df.columns]
 
         subset = df[available].copy()
-        _write_output(subset, os.path.join(_out_dir, output_filename), OUTPUT_FORMAT)
+        output_paths.append(_write_output(subset, os.path.join(_out_dir, output_filename), OUTPUT_FORMAT))
 
-    return os.path.abspath(_out_dir)
+    return output_paths

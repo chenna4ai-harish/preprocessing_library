@@ -4,7 +4,7 @@ Template : file_deduplicate  |  PS-10
 Purpose  : Remove duplicate rows based on KEY_COLUMNS.
            Produces a clean deduplicated file and a duplicates report.
            KEEP strategy: 'first' | 'last' | 'none'  (none = drop ALL duplicates)
-Contract : preprocess(input_path: str) -> str
+Contract : preprocess(input_path: str) -> list
 """
 from __future__ import annotations
 
@@ -133,7 +133,7 @@ def preprocess(input_path: str) -> str:
 
     Returns
     -------
-    str
+    list
         Absolute path to the deduplicated output file.
     """
     df = _load_file(input_path)
@@ -164,4 +164,4 @@ def preprocess(input_path: str) -> str:
 
     _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_path))
     out_path = os.path.join(_out_dir, OUTPUT_FILENAME)
-    return _write_output(clean_df, out_path, OUTPUT_FORMAT)
+    return [_write_output(clean_df, out_path, OUTPUT_FORMAT)]

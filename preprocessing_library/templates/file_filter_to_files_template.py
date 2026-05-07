@@ -5,7 +5,7 @@ Purpose  : Apply one or more pandas query conditions to a source file and
            route matching rows to separate named output files.
            Rows matching no condition are written to UNMATCHED_FILENAME
            (or discarded if UNMATCHED_FILENAME is empty string).
-Contract : preprocess(input_path: str) -> str   (returns OUTPUT_DIR)
+Contract : preprocess(input_path: str) -> list
 
 FILTER_RULES format (Python list literal injected at generation time):
     [
@@ -138,14 +138,17 @@ def preprocess(input_path: str) -> str:
 
     Returns
     -------
-    str
-        Absolute path to OUTPUT_DIR.
+    list
+        List of absolute paths to the written output files.
     """
+    if isinstance(input_path, list):
+        input_path = input_path[0]
     df = _load_file(input_path)
     _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_path))
     os.makedirs(_out_dir, exist_ok=True)
 
     matched_index: set = set()
+    output_paths: list = []
 
     for rule in FILTER_RULES:
         condition       = rule.get("condition", "")
@@ -165,16 +168,16 @@ def preprocess(input_path: str) -> str:
             ) from exc
 
         matched_index.update(matched.index.tolist())
-        _write_output(matched, os.path.join(_out_dir, output_filename), OUTPUT_FORMAT)
+        output_paths.append(_write_output(matched, os.path.join(_out_dir, output_filename), OUTPUT_FORMAT))
 
     # Handle unmatched rows
     if UNMATCHED_FILENAME:
         unmatched = df[~df.index.isin(matched_index)]
         if not unmatched.empty:
-            _write_output(
+            output_paths.append(_write_output(
                 unmatched,
                 os.path.join(_out_dir, UNMATCHED_FILENAME),
                 OUTPUT_FORMAT,
-            )
+            ))
 
-    return os.path.abspath(_out_dir)
+    return output_paths

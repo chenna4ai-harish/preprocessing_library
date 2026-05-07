@@ -4,7 +4,7 @@ Template : file_split_by_value  |  PS-07
 Purpose  : Split a single file into N output files — one per distinct value
            found in SPLIT_COLUMN.  Null/NaN values are written to a separate
            {SPLIT_COLUMN}_NULL file.
-Contract : preprocess(input_path: str) -> str   (returns OUTPUT_DIR)
+Contract : preprocess(input_path: str) -> list
 """
 from __future__ import annotations
 
@@ -136,9 +136,11 @@ def preprocess(input_path: str) -> str:
 
     Returns
     -------
-    str
-        Absolute path to OUTPUT_DIR (contains all split files).
+    list
+        List of absolute paths to the written output files.
     """
+    if isinstance(input_path, list):
+        input_path = input_path[0]
     df = _load_file(input_path)
 
     if SPLIT_COLUMN not in df.columns:
@@ -151,6 +153,8 @@ def preprocess(input_path: str) -> str:
     non_null_df = df[~null_mask]
     null_df     = df[null_mask]
 
+    output_paths: list = []
+
     # Write one file per distinct non-null value
     for value in non_null_df[SPLIT_COLUMN].unique():
         subset = non_null_df[non_null_df[SPLIT_COLUMN] == value].copy()
@@ -162,7 +166,7 @@ def preprocess(input_path: str) -> str:
             split_column=SPLIT_COLUMN,
             value=safe_val,
         )
-        _write_output(subset, os.path.join(_out_dir, filename), OUTPUT_FORMAT)
+        output_paths.append(_write_output(subset, os.path.join(_out_dir, filename), OUTPUT_FORMAT))
 
     # Write null rows to a dedicated _NULL file
     if not null_df.empty:
@@ -170,6 +174,6 @@ def preprocess(input_path: str) -> str:
         if not INCLUDE_SPLIT_COLUMN:
             null_subset = null_subset.drop(columns=[SPLIT_COLUMN])
         null_filename = f"{SPLIT_COLUMN}_NULL.{OUTPUT_FORMAT.lower()}"
-        _write_output(null_subset, os.path.join(_out_dir, null_filename), OUTPUT_FORMAT)
+        output_paths.append(_write_output(null_subset, os.path.join(_out_dir, null_filename), OUTPUT_FORMAT))
 
-    return os.path.abspath(_out_dir)
+    return output_paths

@@ -4,7 +4,7 @@ Template : file_join_multi  |  PS-04
 Purpose  : Chain-join three or more files sequentially.
            BASE_FILENAME (or input_paths[0]) is the base; JOIN_STEPS describes
            each subsequent join.
-Contract : preprocess(input_paths: list) -> str
+Contract : preprocess(input_paths: list) -> list
 
 JOIN_STEPS format (Python list literal injected at generation time):
 

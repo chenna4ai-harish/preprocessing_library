@@ -165,7 +165,7 @@ def preprocess(input_path: str) -> str:
 
     Returns
     -------
-    str
+    list
         Absolute path to the ranked (and optionally filtered) output file.
     """
     df = _load_file(input_path)
@@ -230,4 +230,4 @@ def preprocess(input_path: str) -> str:
 
     _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_path))
     out_path = os.path.join(_out_dir, OUTPUT_FILENAME)
-    return _write_output(out_df, out_path, OUTPUT_FORMAT)
+    return [_write_output(out_df, out_path, OUTPUT_FORMAT)]
