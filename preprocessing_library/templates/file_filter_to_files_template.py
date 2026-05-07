@@ -5,7 +5,7 @@ Purpose  : Apply one or more pandas query conditions to a source file and
            route matching rows to separate named output files.
            Rows matching no condition are written to UNMATCHED_FILENAME
            (or discarded if UNMATCHED_FILENAME is empty string).
-Contract : preprocess(input_path: str) -> list
+Contract : preprocess(input_path: str) -> list  (returns list of output file paths)
 
 FILTER_RULES format (Python list literal injected at generation time):
     [
@@ -138,15 +138,17 @@ def preprocess(input_path: str) -> list:
 
     Returns
     -------
-    list
-        List of absolute paths to the written output files.
+    list[str]
+        Absolute paths to every output file written.
     """
     if isinstance(input_path, list):
         input_path = input_path[0]
+
     df = _load_file(input_path)
     _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_path))
     os.makedirs(_out_dir, exist_ok=True)
 
+    output_paths: list = []
     matched_index: set = set()
     output_paths: list = []
 
@@ -168,16 +170,20 @@ def preprocess(input_path: str) -> list:
             ) from exc
 
         matched_index.update(matched.index.tolist())
-        output_paths.append(_write_output(matched, os.path.join(_out_dir, output_filename), OUTPUT_FORMAT))
+        output_paths.append(
+            _write_output(matched, os.path.join(_out_dir, output_filename), OUTPUT_FORMAT)
+        )
 
     # Handle unmatched rows
     if UNMATCHED_FILENAME:
         unmatched = df[~df.index.isin(matched_index)]
         if not unmatched.empty:
-            output_paths.append(_write_output(
-                unmatched,
-                os.path.join(_out_dir, UNMATCHED_FILENAME),
-                OUTPUT_FORMAT,
-            ))
+            output_paths.append(
+                _write_output(
+                    unmatched,
+                    os.path.join(_out_dir, UNMATCHED_FILENAME),
+                    OUTPUT_FORMAT,
+                )
+            )
 
     return output_paths

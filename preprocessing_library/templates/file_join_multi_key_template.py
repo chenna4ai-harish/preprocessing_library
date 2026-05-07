@@ -138,24 +138,41 @@ def _write_output(df: pd.DataFrame, out_path: str, fmt: str) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _expand_zip_inputs(input_paths: list) -> "tuple[list, object]":
-    """Expand any ZIP files in input_paths; return (expanded_paths, tmp_dir_or_None)."""
+def _expand_zip_inputs(input_paths: list, tmp_dir: str) -> list:
+    """Extract ALL supported files from ZIPs to tmp_dir; pass plain files through.
+    Scans each path's base directory for neighbour ZIPs. Returns resolved paths."""
     _supported = {".csv", ".tsv", ".txt", ".xlsx", ".xls", ".json", ".xml"}
-    tmp = _tempfile.TemporaryDirectory()
-    expanded: list = []
-    seen: set = set()
+    _seen: dict = {}
+    _resolved: list = []
+
+    def _extract_one_zip(zip_path: str) -> None:
+        key = os.path.abspath(zip_path)
+        if key in _seen:
+            return
+        _seen[key] = True
+        with _zipfile.ZipFile(zip_path, "r") as z:
+            for name in z.namelist():
+                if _Path(name).suffix.lower() in _supported:
+                    dest = os.path.join(tmp_dir, os.path.basename(name))
+                    with z.open(name) as src, open(dest, "wb") as dst:
+                        dst.write(src.read())
+                    if dest not in _resolved:
+                        _resolved.append(dest)
+        for entry in os.scandir(os.path.dirname(os.path.abspath(zip_path))):
+            if entry.is_file() and entry.name.lower().endswith(".zip"):
+                _extract_one_zip(entry.path)
+
     for p in input_paths:
-        abs_p = os.path.abspath(p)
-        if _Path(p).suffix.lower() == ".zip" and abs_p not in seen:
-            seen.add(abs_p)
-            with _zipfile.ZipFile(p, "r") as z:
-                names = [n for n in z.namelist() if _Path(n).suffix.lower() in _supported]
-                for name in names:
-                    z.extract(name, tmp.name)
-                    expanded.append(os.path.join(tmp.name, name))
+        if _Path(p).suffix.lower() == ".zip":
+            _extract_one_zip(p)
         else:
-            expanded.append(p)
-    return expanded, tmp
+            if p not in _resolved:
+                _resolved.append(p)
+            for entry in os.scandir(os.path.dirname(os.path.abspath(p))):
+                if entry.is_file() and entry.name.lower().endswith(".zip"):
+                    _extract_one_zip(entry.path)
+
+    return _resolved
 
 
 def _find_input_file(input_paths: list, filename: str, fallback_idx: int = 0) -> str:
@@ -208,19 +225,30 @@ def preprocess(input_paths: list) -> list:
         Absolute path to the merged output file.
     """
     if isinstance(input_paths, str):
-        input_paths = [input_paths]
-    _tmp = None
-    if any(_Path(p).suffix.lower() == ".zip" for p in input_paths):
-        input_paths, _tmp = _expand_zip_inputs(input_paths)
+        if "," in input_paths:
+            input_paths = [p.strip() for p in input_paths.split(",")]
+        else:
+            input_paths = [input_paths, input_paths]
+    if isinstance(input_paths, list) and len(input_paths) == 1:
+        input_paths = [input_paths[0], input_paths[0]]
     if len(input_paths) < 2:
         raise ValueError(
             f"file_join_multi_key requires exactly 2 input files; got {len(input_paths)}."
         )
 
-    left_path  = _find_input_file(input_paths, LEFT_FILENAME,  0)
-    right_path = _find_input_file(input_paths, RIGHT_FILENAME, 1)
-    left  = _apply_usecols(_load_file(left_path,  LEFT_INNER_FILE),  LEFT_USECOLS)
-    right = _apply_usecols(_load_file(right_path, RIGHT_INNER_FILE), RIGHT_USECOLS)
+    _tmp = _tempfile.TemporaryDirectory()
+    if any(_Path(p).suffix.lower() == ".zip" for p in input_paths):
+        _res = _expand_zip_inputs(input_paths, _tmp.name)
+        left_path  = _find_input_file(_res, LEFT_FILENAME,  0)
+        right_path = _find_input_file(_res, RIGHT_FILENAME, 1)
+        left  = _apply_usecols(_load_file(left_path),  LEFT_USECOLS)
+        right = _apply_usecols(_load_file(right_path), RIGHT_USECOLS)
+    else:
+        left_path  = _find_input_file(input_paths, LEFT_FILENAME,  0)
+        right_path = _find_input_file(input_paths, RIGHT_FILENAME, 1)
+        left  = _apply_usecols(_load_file(left_path,  LEFT_INNER_FILE),  LEFT_USECOLS)
+        right = _apply_usecols(_load_file(right_path, RIGHT_INNER_FILE), RIGHT_USECOLS)
+    _tmp.cleanup()
 
     if DEDUP_RIGHT_BY and DEDUP_RIGHT_BY in right.columns:
         right = right.drop_duplicates(subset=DEDUP_RIGHT_BY, keep=DEDUP_KEEP or "first")
@@ -274,6 +302,4 @@ def preprocess(input_paths: list) -> list:
 
     _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_paths[0]))
     out_path = os.path.join(_out_dir, OUTPUT_FILENAME)
-    if _tmp is not None:
-        _tmp.cleanup()
     return [_write_output(merged, out_path, OUTPUT_FORMAT)]

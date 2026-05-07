@@ -136,11 +136,12 @@ def preprocess(input_path: str) -> list:
 
     Returns
     -------
-    list
-        List of absolute paths to the written output files.
+    list[str]
+        Absolute paths to every output file written.
     """
     if isinstance(input_path, list):
         input_path = input_path[0]
+
     df = _load_file(input_path)
 
     if SPLIT_COLUMN not in df.columns:
@@ -149,6 +150,7 @@ def preprocess(input_path: str) -> list:
     _out_dir = OUTPUT_DIR if OUTPUT_DIR else os.path.dirname(os.path.abspath(input_path))
     os.makedirs(_out_dir, exist_ok=True)
 
+    output_paths: list = []
     null_mask   = df[SPLIT_COLUMN].isna()
     non_null_df = df[~null_mask]
     null_df     = df[null_mask]
